@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
+// import VITE_API_BASE_URL from "";
 
 const AuthContext = createContext(null);
 
@@ -27,7 +28,7 @@ export const AuthProvider = ({ children }) => {
   const isLoggingOut = useRef(false);
 
   // Base API URL
-  const API_BASE_URL = "http://192.168.29.248:5000/api-auth";
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://192.168.29.248:5000/api-auth";
 
   // Validate token with server
   // const validateToken = async (token) => {

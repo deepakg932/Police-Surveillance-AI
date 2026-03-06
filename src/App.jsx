@@ -20,23 +20,25 @@ import RegisterForm from "./components/Auth/RegisterForm";
 import ProtectedRoute from "./components/Auth/ProtectedRoute";
 import PublicRoute from "./components/Auth/PublicRoute";
 import { useFileUpload } from "./hooks/useFileUpload";
-import { workflowSteps, reportsData } from "./data/sampleData";
+import { reportsData } from "./data/sampleData";
 
 function Dashboard() {
   const [activeTab, setActiveTab] = useState("upload");
-  const [uploadedContent, setUploadedContent] = useState(null);
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const [detectionData, setDetectionData] = useState({
     persons: [],
     stats: {
       totalPersons: 0,
-      totalMotorcycles: 0,
       withHelmet: 0,
-      processingTime: '0 ms'
+      processingTime: "N/A",
     },
     loading: false,
-    error: null
+    error: null,
+    mode: null,
   });
-  const { uploadProgress, isUploading, handleFileUpload } = useFileUpload();
+
+  console.log(detectionData, "fffffffffffffffffffffffffffffffff");
+  const { uploadProgress, isUploading } = useFileUpload();
   const { logout, user, authFetch } = useAuth();
 
   // Fetch detection data when tab changes to detection or after upload
@@ -47,124 +49,199 @@ function Dashboard() {
   }, [activeTab]);
 
   const fetchDetectionData = async () => {
-    setDetectionData(prev => ({ ...prev, loading: true, error: null }));
-    
+    setDetectionData((prev) => ({ ...prev, loading: true, error: null }));
+
     try {
-      // You can add query parameters if needed
-      const response = await authFetch("http://192.168.29.248:5000/api/video/search");
-      
+      const response = await authFetch(`${API_BASE_URL}/video/search`);
+
       if (!response.ok) {
         throw new Error(`Failed to fetch data: ${response.status}`);
       }
-      
+
       const data = await response.json();
       console.log("Detection data received:", data);
-      
+
       // Transform API data to match your component structure
       const transformedData = transformApiData(data);
-      
+
+      console.log("Transformed data:", transformedData);
+
       setDetectionData({
         persons: transformedData.persons,
         stats: transformedData.stats,
         loading: false,
-        error: null
+        error: null,
+        mode: data.mode,
       });
     } catch (error) {
       console.error("Error fetching detection data:", error);
-      setDetectionData(prev => ({
+      setDetectionData((prev) => ({
         ...prev,
         loading: false,
-        error: error.message
+        error: error.message,
       }));
     }
   };
 
-// Updated transformApiData function in your Dashboard component
-const transformApiData = (apiData) => {
-  console.log("Transforming API data:", apiData);
-  
-  // Check if apiData has the structure from your response
-  if (apiData.results && Array.isArray(apiData.results)) {
-    // Group detections by trackingId to create unique persons
-    const personsMap = new Map();
-    
-    apiData.results.forEach((item, index) => {
-      const trackingId = item.trackingId || `unknown_${index}`;
-      
-      if (!personsMap.has(trackingId)) {
-        personsMap.set(trackingId, {
-          id: trackingId,
-          trackingId: trackingId,
-          startTime: item.timestamp || '00:00',
-          endTime: item.timestamp || '00:00', // You might want to calculate this properly
-          blueShirt: false, // Not in your response
-          helmet: true, // Since all are "person with helmet"
-          motorcycle: false, // Not in your response
-          confidence: Math.round(item.confidence * 100), // Convert to percentage
-          thumbnail: item.screenshotUrl || item.image_path,
-          timestamp: item.timestamp,
-          image_path: item.image_path,
-          screenshotUrl: item.screenshotUrl
-        });
-      } else {
-        // Update end time if this is a later detection of the same person
-        const existingPerson = personsMap.get(trackingId);
-        if (parseInt(item.timestamp) > parseInt(existingPerson.endTime)) {
-          existingPerson.endTime = item.timestamp;
+  const transformApiData = (apiData) => {
+    console.log("Raw API data:", apiData);
+
+    // Handle the response structure with results array
+    if (apiData.results && Array.isArray(apiData.results)) {
+      // Process results into persons array
+      const persons = apiData.results.map((item, index) => {
+        // Get the object type from the object field
+        const objectType = item.object || "unknown";
+
+        // Determine if it's a helmet based on object field
+        const hasHelmet = objectType.toLowerCase().includes("helmet");
+
+        // For other attributes, since the object is just "helmet" in your response,
+        // we set appropriate defaults
+        const hasBlack = false; // Not provided in response
+        const hasShirt = false; // Not provided in response
+        const hasPerson = objectType.toLowerCase().includes("person");
+
+        // Get the image URL - prioritize screenshotUrl, then image_path
+        let imageUrl = null;
+        if (item.screenshotUrl) {
+          imageUrl = item.screenshotUrl;
+        } else if (item.image_path) {
+          // Check if it's a full URL or relative path
+          if (item.image_path.startsWith("http")) {
+            imageUrl = item.image_path;
+          } else {
+            // If it's a relative path, construct the full URL
+            // Use the base URL from your API or environment
+            const baseUrl = API_BASE_URL || "http://localhost:5000";
+            imageUrl = `${baseUrl}/${item.image_path}`;
+          }
         }
+
+        return {
+          id: item.trackingId || `unknown_${index}`,
+          trackingId: item.trackingId,
+          object: item.object,
+          startTime: item.timestamp || "00:00",
+          endTime: item.timestamp || "00:00",
+          // Parse attributes from object string
+          helmet: hasHelmet,
+          blackShirt: hasBlack,
+          shirt: hasShirt,
+          person: hasPerson,
+          confidence: item.confidence ? Math.round(item.confidence * 100) : 0,
+          thumbnail: imageUrl,
+          image_path: item.image_path,
+          screenshotUrl: item.screenshotUrl,
+          bbox: item.bbox,
+          timestamp: item.timestamp,
+          fullImageUrl: imageUrl,
+          processing_time: item.processing_time,
+        };
+      });
+
+      // Create dynamic stats from counts object
+      const stats = {
+        totalPersons: apiData.totalUniqueObjects || persons.length,
+        processingTime: apiData.results[0]?.processing_time || "N/A",
+      };
+
+      // Add all counts from the counts object dynamically
+      if (apiData.counts) {
+        Object.entries(apiData.counts).forEach(([key, value]) => {
+          // Convert count keys to readable labels
+          let label = key;
+          if (key === "total_helmet") {
+            label = "withHelmet";
+          } else if (key === "total_person") {
+            label = "totalPersons";
+          } else {
+            // Remove 'total_' prefix and convert to camelCase
+            label = key
+              .replace(/^total_/, "")
+              .replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+          }
+          stats[label] = value;
+        });
       }
-    });
 
-    const persons = Array.from(personsMap.values());
-    
-    // Calculate stats based on your response
-    const stats = {
-      totalPersons: apiData.totalUniqueObjects || persons.length,
-      totalMotorcycles: 0, // Not in your response
-      withHelmet: apiData.counts?.["person with helmet"] || persons.length,
-      processingTime: 'N/A' // Not in your response
-    };
-
-    return { persons, stats };
-  }
-  
-  // Handle other possible response structures
-  if (apiData.persons && apiData.stats) {
-    return {
-      persons: apiData.persons.map(person => ({
-        id: person.id || person.trackingId,
-        startTime: person.startTime || person.start_time || person.timestamp,
-        endTime: person.endTime || person.end_time || person.timestamp,
-        blueShirt: person.blueShirt || person.blue_shirt || false,
-        helmet: person.helmet || person.object?.includes('helmet') || false,
-        motorcycle: person.motorcycle || false,
-        confidence: person.confidence ? Math.round(person.confidence * 100) : person.confidence,
-        thumbnail: person.thumbnail || person.screenshotUrl || person.image_path
-      })),
-      stats: {
-        totalPersons: apiData.stats.totalPersons || apiData.totalUniqueObjects || apiData.persons.length,
-        totalMotorcycles: apiData.stats.totalMotorcycles || 0,
-        withHelmet: apiData.stats.withHelmet || apiData.counts?.["person with helmet"] || 0,
-        processingTime: apiData.stats.processingTime || 'N/A'
+      // Ensure withHelmet is set from total_helmet if available
+      if (apiData.counts?.total_helmet !== undefined) {
+        stats.withHelmet = apiData.counts.total_helmet;
+      } else {
+        // If no helmet count, calculate from persons array
+        stats.withHelmet = persons.filter((p) => p.helmet).length;
       }
-    };
-  }
 
-  // Default structure
-  return {
-    persons: [],
-    stats: {
-      totalPersons: 0,
-      totalMotorcycles: 0,
-      withHelmet: 0,
-      processingTime: 'N/A'
+      console.log("Transformed persons:", persons);
+      console.log("Transformed stats:", stats);
+
+      return { persons, stats };
     }
+
+    // Handle previous response structure with persons and stats
+    if (apiData.persons && apiData.stats) {
+      return {
+        persons: apiData.persons.map((person) => {
+          // Get the image URL
+          let imageUrl = null;
+          if (person.screenshotUrl) {
+            imageUrl = person.screenshotUrl;
+          } else if (person.image_path) {
+            if (person.image_path.startsWith("http")) {
+              imageUrl = person.image_path;
+            } else {
+              const baseUrl = API_BASE_URL || "http://localhost:5000";
+              imageUrl = `${baseUrl}/${person.image_path}`;
+            }
+          } else if (person.thumbnail) {
+            imageUrl = person.thumbnail;
+          }
+
+          return {
+            id: person.id || person.trackingId,
+            startTime:
+              person.startTime || person.start_time || person.timestamp,
+            endTime: person.endTime || person.end_time || person.timestamp,
+            blueShirt: person.blueShirt || person.blue_shirt || false,
+            helmet: person.helmet || person.object?.includes("helmet") || false,
+            motorcycle: person.motorcycle || false,
+            confidence: person.confidence
+              ? Math.round(person.confidence * 100)
+              : person.confidence,
+            thumbnail: imageUrl,
+            image_path: person.image_path,
+            screenshotUrl: person.screenshotUrl,
+            fullImageUrl: imageUrl,
+            processing_time: person.processing_time,
+          };
+        }),
+        stats: {
+          totalPersons:
+            apiData.stats.totalPersons ||
+            apiData.totalUniqueObjects ||
+            apiData.persons.length,
+          totalMotorcycles: apiData.stats.totalMotorcycles || 0,
+          withHelmet:
+            apiData.stats.withHelmet || apiData.counts?.total_helmet || 0,
+          processingTime: apiData.persons.processing_time || "N/A",
+        },
+      };
+    }
+
+    // Default structure
+    return {
+      persons: [],
+      stats: {
+        totalPersons: 0,
+        withHelmet: 0,
+        processingTime: "N/A",
+      },
+    };
   };
-};
 
   const handleSubmit = async (data) => {
     console.log("Submitting:", data);
-    setUploadedContent(data);
 
     try {
       const videoFile = data.file || data.video;
@@ -184,23 +261,16 @@ const transformApiData = (apiData) => {
         formData.append("text", data.text);
       }
 
-      // if (user?.id) {
-      //   formData.append("userId", user.id);
-      // }
-
       for (let pair of formData.entries()) {
         console.log(
           pair[0] + ": " + (pair[1] instanceof File ? pair[1].name : pair[1]),
         );
       }
 
-      const response = await authFetch(
-        "http://192.168.29.248:5000/api/video/upload",
-        {
-          method: "POST",
-          body: formData,
-        },
-      );
+      const response = await authFetch(`${API_BASE_URL}/video/upload`, {
+        method: "POST",
+        body: formData,
+      });
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -211,7 +281,7 @@ const transformApiData = (apiData) => {
       console.log("Upload successful:", result);
 
       alert("Video uploaded successfully!");
-      
+
       // Fetch the latest detection data after successful upload
       await fetchDetectionData();
       setActiveTab("detection");
@@ -225,20 +295,21 @@ const transformApiData = (apiData) => {
     try {
       const queryParams = new URLSearchParams(searchData).toString();
       const response = await authFetch(
-        `http://192.168.29.248:5000/api/search?${queryParams}`,
+        `${API_BASE_URL}/video/search?${queryParams}`,
       );
 
       if (response.ok) {
         const results = await response.json();
         console.log("Search results:", results);
-        
+
         // Transform and update the detection data with search results
         const transformedData = transformApiData(results);
         setDetectionData({
           persons: transformedData.persons,
           stats: transformedData.stats,
           loading: false,
-          error: null
+          error: null,
+          mode: results.mode,
         });
       }
     } catch (error) {
@@ -269,7 +340,7 @@ const transformApiData = (apiData) => {
             ) : detectionData.error ? (
               <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
                 <p className="text-red-400">Error: {detectionData.error}</p>
-                <button 
+                <button
                   onClick={fetchDetectionData}
                   className="mt-4 px-4 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30"
                 >
@@ -278,7 +349,10 @@ const transformApiData = (apiData) => {
               </div>
             ) : (
               <>
-                <DetectionStats stats={detectionData.stats} />
+                <DetectionStats
+                  stats={detectionData.stats}
+                  mode={detectionData.mode}
+                />
                 <DetectedPersonsTable persons={detectionData.persons} />
               </>
             )}
