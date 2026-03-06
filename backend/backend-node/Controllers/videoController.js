@@ -66,6 +66,7 @@ exports.searchDetections = async (req, res) => {
   }
 };
 
+
 //yh wali api sahi h abhi chl ri h
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
@@ -248,45 +249,44 @@ exports.searchDetections = async (req, res) => {
 
 
 
-
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
-    const imageFile = req.files?.image?.[0]; 
+    console.log(videoFile, "ppppppppppp");
+    const imageFile = req.files?.image?.[0]; // Optional Image
+    console.log(imageFile, "mmmmmmmmmmm");
     const userPrompt = req.body.text || "person, car";
+    console.log(userPrompt, "oooooooooooo");
 
     if (!videoFile) return res.status(400).json({ message: "Video missing" });
-    
     const startTime = Date.now();
+    console.log(startTime, "startt");
+
     const videoPath = path.resolve(videoFile.path);
     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
 
-    // 🌐 DYNAMIC URL FROM ENV
-    // Agar env file mein PYTHON_API_URL nahi mila, toh default localhost use karega
-    const PYTHON_BASE_URL = process.env.PYTHON_API_URL || "http://127.0.0.1:8000";
-    
-    console.log(`📡 Sending request to Python API: ${PYTHON_BASE_URL}/process`);
-
-    const response = await axios.post(`${PYTHON_BASE_URL}/process`, {
+    const response = await axios.post("http://127.0.0.1:8000/process", {
       filePath: videoPath,
       imagePath: imagePath,
       prompt: userPrompt,
-    }, { timeout: 600000 }); // 10 minutes timeout
+    });
 
+    // const detections = response.data.results || [];
     const endTime = Date.now();
+    console.log(endTime, "hhhhhh");
+
     const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
+    console.log(durationSeconds, "startkkk");
     const processingTimeStr = `${durationSeconds}s`;
+    console.log(processingTimeStr, "ssssssss");
 
-    // 🔍 FILTER: Pehle 0.6 tha, agar results kam aa rahe hain toh ise 0.3 kar sakte ho
     const detections = (response.data.results || []).filter(
-      (d) => d.confidence >= 0.4 
+      (d) => d.confidence >= 0.6,
     );
-
-    // 🏠 BASE URL FOR SCREENSHOTS
-    // Render par deploy karte waqt BASE_URL environment variable mein apna backend link dalna
-    const BASE_URL = process.env.BASE_URL || "http://localhost:5000";
+    const BASE_URL = "http://localhost:5000";
 
     const finalCounts = {};
+
     const keywords = userPrompt
       .toLowerCase()
       .split(/[\s,]+/)
@@ -302,32 +302,50 @@ exports.uploadAndProcess = async (req, res) => {
       finalCounts[`total_${key}`] = uniqueSet.size;
     });
 
+    // if (detections.length > 0) {
+    //   await Detection.insertMany(detections.map(d => (
+    //     {
+    //     fileName: videoFile.filename,
+    //     textNote: userPrompt,
+    //     object: d.object,
+    //     confidence: d.confidence,
+    //     timestamp: d.timestamp,
+    //     trackingId: d.trackingId,
+    //     bbox: d.bbox,
+    //     image_path: d.image_path
+    //   })));
+    // }
     if (detections.length > 0) {
       await Detection.insertMany(
         detections.map((d) => {
           const cleanPath = d.image_path.replace(/\\/g, "/");
+
           return {
             fileName: videoFile.filename,
             textNote: userPrompt,
             object: d.object,
             confidence: d.confidence,
             timestamp: d.timestamp,
-            trackingId: d.trackingId.toString(),
+            trackingId: d.trackingId.toString(), // String mein convert karna safe hai
             bbox: d.bbox,
-            imagePath: cleanPath,
-            screenshotUrl: `${BASE_URL}/${cleanPath}`, 
+            imagePath: cleanPath, // DB field: imagePath
+            screenshotUrl: `${BASE_URL}/${cleanPath}`, // 🎯 DB field: screenshotUrl (AB SAVE HOGA)
             processingTime: processingTimeStr,
           };
-        })
+        }),
       );
+      
     }
-
     return res.json({
       message: "Success",
       processing_time: processingTimeStr,
       mode: imageFile ? "Image Search" : "Text Search",
-      counts: finalCounts,
+      counts: finalCounts, // e.g., { total_person: 5, total_helmet: 5 }
       totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
+      // results: detections.map(d => ({
+      //   ...d,
+      //   screenshotUrl: `http://localhost:5000/${d.image_path}`
+      // }))
       results: detections.map((d) => {
         const cleanPath = d.image_path.replace(/\\/g, "/");
         return {
