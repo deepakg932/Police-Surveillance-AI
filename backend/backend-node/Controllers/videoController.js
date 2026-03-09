@@ -361,21 +361,26 @@ exports.uploadAndProcess = async (req, res) => {
     //   prompt: userPrompt,
 
     // });
+const imageUrl = imageFile
+  ? `${process.env.BASE_URL}/uploads/${imageFile.filename}`
+  : null;
 
-    const response = await axios.post(
-      `${process.env.PYTHON_API_URL}/process`,
-      {
-        filePath: videoUrl,
-        imagePath: imagePath,
-        prompt: userPrompt,
-      },
-      {
-        timeout: 0, // unlimited
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      },
-    );
-
+const response = await axios.post(
+  `${process.env.PYTHON_API_URL}/process`,
+  {
+    fileUrl: videoUrl,   // 👈 change
+    imageUrl: imageUrl,  // 👈 change
+    prompt: userPrompt,
+  },
+  {
+    timeout: 0,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+  }
+);
+console.log(response.filePath,"mmmmmmmmmmmmmmmm")
+console.log("VIDEO URL SENT:", videoUrl);
+console.log("IMAGE URL SENT:", imageUrl);
     // const detections = response.data.results || [];
     const endTime = Date.now();
     console.log(endTime, "hhhhhh");

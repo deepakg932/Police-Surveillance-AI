@@ -188,6 +188,7 @@ import cv2
 import os
 import torch
 import numpy as np
+import requests
 from torchvision import models, transforms
 from PIL import Image
 
@@ -221,6 +222,7 @@ async def process_video(req: Request):
 
     video_url = data.get("fileUrl")
     image_url = data.get("imageUrl")
+    print("VIDEO URL RECEIVED:", video_url)
     user_prompt = data.get("prompt", "person")
 
     print(f"\n🚀 [START] Processing Started...")
