@@ -18,3 +18,4 @@ pillow
 python-multipart
 torch
 torchvision
+# jjjjj
