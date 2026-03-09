@@ -38,5 +38,15 @@ app.get("/", (req, res) => {
 
 
 let port = process.env.PORT || 5000
-console.log(port,"kkk")
-app.listen(port, () => console.log("Server running on port 5000"));
+
+
+const server = app.listen(port, () =>
+  console.log("Server running on port 5000")
+);
+
+// important
+server.timeout = 10 * 60 * 1000; // 10 minutes
+server.keepAliveTimeout = 10 * 60 * 1000;
+server.headersTimeout = 10 * 60 * 1000;
+// console.log(port,"kkk")
+// app.listen(port, () => console.log("Server running on port 5000"));

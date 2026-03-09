@@ -247,6 +247,119 @@ exports.searchDetections = async (req, res) => {
 
 
 
+// exports.uploadAndProcess = async (req, res) => {
+//   try {
+//     const videoFile = req.files?.file?.[0];
+//     console.log(videoFile, "ppppppppppp");
+//     const imageFile = req.files?.image?.[0]; // Optional Image
+//     console.log(imageFile, "mmmmmmmmmmm");
+//     const userPrompt = req.body.text || "person, car";
+//     console.log(userPrompt, "oooooooooooo");
+
+//     if (!videoFile) return res.status(400).json({ message: "Video missing" });
+//     const startTime = Date.now();
+//     console.log(startTime, "startt");
+
+//     const videoPath = path.resolve(videoFile.path);
+//     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
+
+//     const response = await axios.post(`${process.env.PYTHON_API_URL}/process`, {
+//       filePath: videoPath,
+//       imagePath: imagePath,
+//       prompt: userPrompt,
+//     });
+
+//     // const detections = response.data.results || [];
+//     const endTime = Date.now();
+//     console.log(endTime, "hhhhhh");
+
+//     const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
+//     console.log(durationSeconds, "startkkk");
+//     const processingTimeStr = `${durationSeconds}s`;
+//     console.log(processingTimeStr, "ssssssss");
+
+//     const detections = (response.data.results || []).filter(
+//       (d) => d.confidence >= 0.6,
+//     );
+//     const BASE_URL = "http://localhost:5000";
+
+//     const finalCounts = {};
+
+//     const keywords = userPrompt
+//       .toLowerCase()
+//       .split(/[\s,]+/)
+//       .filter((w) => !["with", "and", "wearing", "in", "a"].includes(w));
+
+//     keywords.forEach((key) => {
+//       const uniqueSet = new Set();
+//       detections.forEach((d) => {
+//         if (d.object.toLowerCase().includes(key)) {
+//           uniqueSet.add(d.trackingId);
+//         }
+//       });
+//       finalCounts[`total_${key}`] = uniqueSet.size;
+//     });
+
+//     // if (detections.length > 0) {
+//     //   await Detection.insertMany(detections.map(d => (
+//     //     {
+//     //     fileName: videoFile.filename,
+//     //     textNote: userPrompt,
+//     //     object: d.object,
+//     //     confidence: d.confidence,
+//     //     timestamp: d.timestamp,
+//     //     trackingId: d.trackingId,
+//     //     bbox: d.bbox,
+//     //     image_path: d.image_path
+//     //   })));
+//     // }
+//     if (detections.length > 0) {
+//       await Detection.insertMany(
+//         detections.map((d) => {
+//           const cleanPath = d.image_path.replace(/\\/g, "/");
+
+//           return {
+//             fileName: videoFile.filename,
+//             textNote: userPrompt,
+//             object: d.object,
+//             confidence: d.confidence,
+//             timestamp: d.timestamp,
+//             trackingId: d.trackingId.toString(), // String mein convert karna safe hai
+//             bbox: d.bbox,
+//             imagePath: cleanPath, // DB field: imagePath
+//             screenshotUrl: `${BASE_URL}/${cleanPath}`, // 🎯 DB field: screenshotUrl (AB SAVE HOGA)
+//             processingTime: processingTimeStr,
+//           };
+//         }),
+//       );
+      
+//     }
+//     return res.json({
+//       message: "Success",
+//       processing_time: processingTimeStr,
+//       mode: imageFile ? "Image Search" : "Text Search",
+//       counts: finalCounts, // e.g., { total_person: 5, total_helmet: 5 }
+//       totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
+//       // results: detections.map(d => ({
+//       //   ...d,
+//       //   screenshotUrl: `http://localhost:5000/${d.image_path}`
+//       // }))
+//       results: detections.map((d) => {
+//         const cleanPath = d.image_path.replace(/\\/g, "/");
+//         return {
+//           ...d,
+//           screenshotUrl: `${BASE_URL}/${cleanPath}`,
+//         };
+//       }),
+//     });
+//   } catch (err) {
+//     console.error("❌ ERROR:", err.message);
+//     return res.status(500).json({ error: err.message });
+//   }
+// };
+
+
+
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
@@ -260,28 +373,48 @@ exports.uploadAndProcess = async (req, res) => {
     const startTime = Date.now();
     console.log(startTime, "startt");
 
-    const videoPath = path.resolve(videoFile.path);
+    // const videoPath = path.resolve(videoFile.path);
+    const videoUrl = `${process.env.BASE_URL}/uploads/${videoFile.filename}`;
+    console.log(videoUrl,"kkkkkkkkkkkkkkkkk")
     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
 
-    const response = await axios.post(`${process.env.PYTHON_API_URL}/process`, {
-      filePath: videoPath,
-      imagePath: imagePath,
-      prompt: userPrompt,
-    });
+    // const response = await axios.post("http://127.0.0.1:8000/process", {
+    //   filePath: videoPath,
+    //   imagePath: imagePath,
+    //   prompt: userPrompt,
+      
+    // });
+
+    const response = await axios.post(
+  "http://127.0.0.1:8000/process",
+  {
+    filePath: videoUrl,
+    imagePath: imagePath,
+    prompt: userPrompt,
+  },
+  {
+      timeout: 0, // unlimited
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity
+  }
+);
 
     // const detections = response.data.results || [];
     const endTime = Date.now();
     console.log(endTime, "hhhhhh");
 
+
+    
     const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
     console.log(durationSeconds, "startkkk");
     const processingTimeStr = `${durationSeconds}s`;
     console.log(processingTimeStr, "ssssssss");
 
     const detections = (response.data.results || []).filter(
-      (d) => d.confidence >= 0.6,
+      (d) => d.confidence >= 0.20
     );
-    const BASE_URL = "http://localhost:5000";
+    // const BASE_URL = "http://localhost:5000";
+    const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
 
     const finalCounts = {};
 
