@@ -413,8 +413,8 @@ exports.uploadAndProcess = async (req, res) => {
     const detections = (response.data.results || []).filter(
       (d) => d.confidence >= 0.20
     );
-    // const BASE_URL = "http://localhost:5000";
-    const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
+    const BASE_URL = process.env.BASE_URL;
+    // const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
 
     const finalCounts = {};
 
