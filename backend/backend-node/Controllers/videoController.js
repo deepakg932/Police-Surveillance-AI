@@ -264,8 +264,7 @@ exports.uploadAndProcess = async (req, res) => {
     const videoPath = path.resolve(videoFile.path);
     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
 
-
-    const response = await axios.post(process.env.PYTHON_API_URL, {
+    const response = await axios.post(`${process.env.PYTHON_API_URL}/process`, {
       filePath: videoPath,
       imagePath: imagePath,
       prompt: userPrompt,
@@ -283,7 +282,7 @@ exports.uploadAndProcess = async (req, res) => {
     const detections = (response.data.results || []).filter(
       (d) => d.confidence >= 0.6,
     );
-    const BASE_URL = process.env.BASE_URL;
+    const BASE_URL = "http://localhost:5000";
 
     const finalCounts = {};
 

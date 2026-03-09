@@ -205,5 +205,3 @@ async def process_video(req: Request):
     cap.release()
     print(f"🏁 [FINISHED] Total unique objects detected: {len(saved_ids)}")
     return {"results": results_list}
-
-
