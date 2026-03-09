@@ -66,7 +66,6 @@ exports.searchDetections = async (req, res) => {
   }
 };
 
-
 //yh wali api sahi h abhi chl ri h
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
@@ -113,25 +112,7 @@ exports.searchDetections = async (req, res) => {
 //   }
 // };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//2nd api sahi bhaii 
+//2nd api sahi bhaii
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
 //     const videoFile = req.files?.file?.[0];
@@ -219,7 +200,7 @@ exports.searchDetections = async (req, res) => {
 //           };
 //         }),
 //       );
-      
+
 //     }
 //     return res.json({
 //       message: "Success",
@@ -244,8 +225,6 @@ exports.searchDetections = async (req, res) => {
 //     return res.status(500).json({ error: err.message });
 //   }
 // };
-
-
 
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
@@ -332,7 +311,7 @@ exports.searchDetections = async (req, res) => {
 //           };
 //         }),
 //       );
-      
+
 //     }
 //     return res.json({
 //       message: "Success",
@@ -358,8 +337,6 @@ exports.searchDetections = async (req, res) => {
 //   }
 // };
 
-
-
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
@@ -375,43 +352,41 @@ exports.uploadAndProcess = async (req, res) => {
 
     // const videoPath = path.resolve(videoFile.path);
     const videoUrl = `${process.env.BASE_URL}/uploads/${videoFile.filename}`;
-    console.log(videoUrl,"kkkkkkkkkkkkkkkkk")
+    console.log(videoUrl, "kkkkkkkkkkkkkkkkk");
     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
 
     // const response = await axios.post("http://127.0.0.1:8000/process", {
     //   filePath: videoPath,
     //   imagePath: imagePath,
     //   prompt: userPrompt,
-      
+
     // });
 
     const response = await axios.post(
-  "http://127.0.0.1:8000/process",
-  {
-    filePath: videoUrl,
-    imagePath: imagePath,
-    prompt: userPrompt,
-  },
-  {
-      timeout: 0, // unlimited
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity
-  }
-);
+      `${process.env.PYTHON_API_URL}/process`,
+      {
+        filePath: videoUrl,
+        imagePath: imagePath,
+        prompt: userPrompt,
+      },
+      {
+        timeout: 0, // unlimited
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      },
+    );
 
     // const detections = response.data.results || [];
     const endTime = Date.now();
     console.log(endTime, "hhhhhh");
 
-
-    
     const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
     console.log(durationSeconds, "startkkk");
     const processingTimeStr = `${durationSeconds}s`;
     console.log(processingTimeStr, "ssssssss");
 
     const detections = (response.data.results || []).filter(
-      (d) => d.confidence >= 0.20
+      (d) => d.confidence >= 0.2,
     );
     const BASE_URL = process.env.BASE_URL;
     // const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
@@ -465,7 +440,6 @@ exports.uploadAndProcess = async (req, res) => {
           };
         }),
       );
-      
     }
     return res.json({
       message: "Success",
