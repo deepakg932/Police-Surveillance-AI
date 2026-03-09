@@ -115,24 +115,15 @@ async def process_video(req: Request):
     image_path = data.get("imagePath")
     user_prompt = data.get("prompt", "person")
 
-    print(f"\n🚀 [START] Processing Started...")
-    print(f"📂 Video: {os.path.basename(video_path)}")
-    print(f"📝 Prompt: {user_prompt}")
+    print(f"🚀 Processing: {user_prompt}")
 
-    target_threshold = 0.35
-    prompt_list = [p.strip() for p in user_prompt.split(",")]
+    # Threshold settings
+    target_threshold = 0.40 
+    # FIX: Ensure prompt is lowercase and clean
+    prompt_list = [p.strip().lower() for p in user_prompt.split(",") if p.strip()]
     model.set_classes(prompt_list)
 
-    ref_feat = None
-    if image_path and os.path.exists(image_path):
-        print(f"📸 Image provided for matching: {os.path.basename(image_path)}")
-        ref_img = cv2.imread(image_path)
-        ref_feat = extract_features(ref_img)
-
     cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"🎞️ Total Frames in Video: {total_frames}")
-
     results_list = []
     saved_ids = set()
     frame_id = 0
@@ -142,22 +133,17 @@ async def process_video(req: Request):
         if not ret: break
         frame_id += 1
         
-        # 🏎️ SPEED BOOST: Har 5th frame skip ki jagah, hum logic ko fast karenge
+        # Skip frames for speed
         if frame_id % 5 != 0: continue 
 
-        # 🎯 OPTIMIZATION: imgsz=640 and half=True (Speed optimized)
-        # Device automatically handles CPU/GPU
+        # FIX: Reduced imgsz to 640 for better general detection and speed
         results = model.track(
             frame, 
             conf=target_threshold, 
-            imgsz=1280, # 1280 se 640 kiya for 2x speed
+            imgsz=640, 
             persist=True, 
-            verbose=False,
-            half=True if torch.cuda.is_available() else False 
+            verbose=False
         )
-
-        if frame_id % 50 == 0:
-            print(f"⏳ Progress: {frame_id}/{total_frames} frames processed...")
 
         if not results[0].boxes or results[0].boxes.id is None: continue
 
@@ -167,30 +153,17 @@ async def process_video(req: Request):
         clss = results[0].boxes.cls.int().cpu().numpy()
 
         for box, track_id, conf, cls_id in zip(boxes, ids, confs, clss):
-            if conf < target_threshold: continue
             if track_id in saved_ids: continue
 
-            x1, y1, x2, y2 = map(int, box)
             label = prompt_list[cls_id]
+            x1, y1, x2, y2 = map(int, box)
 
-            # Image Matching Logic
-            if ref_feat is not None:
-                crop = frame[max(0, y1):y2, max(0, x1):x2]
-                if crop.size == 0: continue
-                obj_feat = extract_features(crop)
-                sim = np.dot(ref_feat, obj_feat) / (np.linalg.norm(ref_feat) * np.linalg.norm(obj_feat))
-                if sim < target_threshold: continue
-                conf = sim 
-
-            print(f"✅ Found: {label} (ID: {track_id}) at Frame {frame_id}")
-
-            img_path = os.path.join(SAVE_DIR, f"track_{track_id}.jpg")
-            annotated = frame.copy()
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(annotated, f"{label} {conf:.2f}", (x1, y1-10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            # Save detection
+            img_name = f"track_{track_id}.jpg"
+            img_path = os.path.join(SAVE_DIR, img_name)
             
-            cv2.imwrite(img_path, annotated)
+            # Simple crop & save logic
+            cv2.imwrite(img_path, frame[y1:y2, x1:x2])
             saved_ids.add(track_id)
             
             results_list.append({
@@ -203,5 +176,4 @@ async def process_video(req: Request):
             })
 
     cap.release()
-    print(f"🏁 [FINISHED] Total unique objects detected: {len(saved_ids)}")
     return {"results": results_list}

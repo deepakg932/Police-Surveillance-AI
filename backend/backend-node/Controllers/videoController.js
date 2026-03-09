@@ -247,7 +247,6 @@ exports.searchDetections = async (req, res) => {
 
 
 
-
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
