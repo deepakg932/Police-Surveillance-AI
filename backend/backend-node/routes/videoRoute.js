@@ -28,6 +28,6 @@ const  multiUpload = require("../middleware/upload.js");
 
 // 🔐 protected routes
 router.post("/upload", authMiddleware, multiUpload, uploadAndProcess);
-router.get("/search", authMiddleware, searchDetections);
+router.get("/search", searchDetections);
 
 module.exports = router;

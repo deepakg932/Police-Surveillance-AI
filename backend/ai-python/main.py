@@ -75,12 +75,120 @@
 #     return {"results": results_list}
 
 
+# from fastapi import FastAPI, Request
+# from ultralytics import YOLOWorld
+# import cv2
+# import os
+# import torch
+# import numpy as np
+# from torchvision import models, transforms
+# from PIL import Image
+
+# app = FastAPI()
+# # V2 model is better for dynamic prompts
+# model = YOLOWorld("yolov8s-worldv2.pt")
+
+# # Feature Extractor (Image se video match karne ke liye)
+# resnet = models.resnet50(pretrained=True)
+# resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
+# resnet.eval()
+
+# SAVE_DIR = "detected_frames"
+# os.makedirs(SAVE_DIR, exist_ok=True)
+
+# transform = transforms.Compose([
+#     transforms.Resize((224, 224)),
+#     transforms.ToTensor(),
+#     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+# ])
+
+# def extract_features(img):
+#     img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+#     img = transform(img).unsqueeze(0)
+#     with torch.no_grad():
+#         return resnet(img).flatten().numpy()
+
+# @app.post("/process")
+# async def process_video(req: Request):
+#     data = await req.json()
+#     video_path = data.get("filePath")
+#     image_path = data.get("imagePath")
+#     user_prompt = data.get("prompt", "person")
+
+#     print(f"🚀 Processing: {user_prompt}")
+
+#     # Threshold settings
+#     target_threshold = 0.40 
+#     # FIX: Ensure prompt is lowercase and clean
+#     prompt_list = [p.strip().lower() for p in user_prompt.split(",") if p.strip()]
+#     model.set_classes(prompt_list)
+
+#     cap = cv2.VideoCapture(video_path)
+#     results_list = []
+#     saved_ids = set()
+#     frame_id = 0
+
+#     while cap.isOpened():
+#         ret, frame = cap.read()
+#         if not ret: break
+#         frame_id += 1
+        
+#         # Skip frames for speed
+#         if frame_id % 5 != 0: continue 
+
+#         # FIX: Reduced imgsz to 640 for better general detection and speed
+#         results = model.track(
+#             frame, 
+#             conf=target_threshold, 
+#             imgsz=640, 
+#             persist=True, 
+#             verbose=False
+#         )
+
+#         if not results[0].boxes or results[0].boxes.id is None: continue
+
+#         boxes = results[0].boxes.xyxy.cpu().numpy()
+#         ids = results[0].boxes.id.int().cpu().numpy()
+#         confs = results[0].boxes.conf.cpu().numpy()
+#         clss = results[0].boxes.cls.int().cpu().numpy()
+
+#         for box, track_id, conf, cls_id in zip(boxes, ids, confs, clss):
+#             if track_id in saved_ids: continue
+
+#             label = prompt_list[cls_id]
+#             x1, y1, x2, y2 = map(int, box)
+
+#             # Save detection
+#             img_name = f"track_{track_id}.jpg"
+#             img_path = os.path.join(SAVE_DIR, img_name)
+            
+#             # Simple crop & save logic
+#             cv2.imwrite(img_path, frame[y1:y2, x1:x2])
+#             saved_ids.add(track_id)
+            
+#             results_list.append({
+#                 "object": label,
+#                 "confidence": float(conf),
+#                 "trackingId": int(track_id),
+#                 "timestamp": str(frame_id),
+#                 "image_path": img_path,
+#                 "bbox": [x1, y1, x2, y2]
+#             })
+
+#     cap.release()
+#     return {"results": results_list}
+
+
+
+
+
 from fastapi import FastAPI, Request
 from ultralytics import YOLOWorld
 import cv2
 import os
 import torch
 import numpy as np
+import requests
 from torchvision import models, transforms
 from PIL import Image
 
@@ -111,21 +219,42 @@ def extract_features(img):
 @app.post("/process")
 async def process_video(req: Request):
     data = await req.json()
-    video_path = data.get("filePath")
-    image_path = data.get("imagePath")
+
+    video_url = data.get("fileUrl")
+    image_url = data.get("imageUrl")
+    print("VIDEO URL RECEIVED:", video_url)
     user_prompt = data.get("prompt", "person")
 
     print(f"\n🚀 [START] Processing Started...")
-    print(f"📂 Video: {os.path.basename(video_path)}")
+    print(f"🎥 Video URL: {video_url}")
     print(f"📝 Prompt: {user_prompt}")
 
-    target_threshold = 0.60 
+    # download video
+    video_path = "temp_video.mp4"
+
+    if video_url:
+        r = requests.get(video_url, stream=True)
+        with open(video_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
+
+    # download image if exists
+    image_path = None
+    if image_url:
+        image_path = "temp_image.jpg"
+        r = requests.get(image_url, stream=True)
+        with open(image_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
+
+    target_threshold = 0.35
     prompt_list = [p.strip() for p in user_prompt.split(",")]
     model.set_classes(prompt_list)
 
     ref_feat = None
     if image_path and os.path.exists(image_path):
-        print(f"📸 Image provided for matching: {os.path.basename(image_path)}")
         ref_img = cv2.imread(image_path)
         ref_feat = extract_features(ref_img)
 
