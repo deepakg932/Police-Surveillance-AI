@@ -342,7 +342,7 @@ exports.uploadAndProcess = async (req, res) => {
     const videoFile = req.files?.file?.[0];
     console.log(videoFile, "ppppppppppp");
     const imageFile = req.files?.image?.[0]; // Optional Image
-    console.log(imageFile, "mmmmmmmmmmm");
+
     const userPrompt = req.body.text || "person, car";
     console.log(userPrompt, "oooooooooooo");
 
@@ -378,7 +378,7 @@ const response = await axios.post(
     maxBodyLength: Infinity,
   }
 );
-console.log(response.filePath,"mmmmmmmmmmmmmmmm")
+
 console.log("VIDEO URL SENT:", videoUrl);
 console.log("IMAGE URL SENT:", imageUrl);
     // const detections = response.data.results || [];
