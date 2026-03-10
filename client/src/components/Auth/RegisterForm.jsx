@@ -18,10 +18,10 @@ const RegisterForm = ({ onRegister, isLoading, error, onSwitchToLogin }) => {
   const [formErrors, setFormErrors] = useState({});
   const [passwordStrength, setPasswordStrength] = useState({
     score: 0,
-    hasLower: false,
     hasUpper: false,
     hasNumber: false,
     hasSpecial: false,
+    hasLower: false,
     minLength: false
   });
 
