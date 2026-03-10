@@ -391,7 +391,7 @@ console.log("IMAGE URL SENT:", imageUrl);
     console.log(processingTimeStr, "ssssssss");
 
     const detections = (response.data.results || []).filter(
-      (d) => d.confidence >= 0.2,
+      (d) => d.confidence >= 0.60,
     );
     const BASE_URL = process.env.BASE_URL;
     // const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
