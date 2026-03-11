@@ -113,7 +113,7 @@ function Dashboard() {
           } else {
             // If it's a relative path, construct the full URL
             // Use the base URL from your API or environment
-            const baseUrl = API_BASE_URL || "http://localhost:5000";
+            const baseUrl = API_BASE_URL ;
             imageUrl = `${baseUrl}/${item.image_path}`;
           }
         }
@@ -191,7 +191,7 @@ function Dashboard() {
             if (person.image_path.startsWith("http")) {
               imageUrl = person.image_path;
             } else {
-              const baseUrl = API_BASE_URL || "http://localhost:5000";
+              const baseUrl = API_BASE_URL ;
               imageUrl = `${baseUrl}/${person.image_path}`;
             }
           } else if (person.thumbnail) {

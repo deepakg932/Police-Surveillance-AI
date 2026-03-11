@@ -1,21 +1,11 @@
-# fastapi
-# uvicorn
-# ultralytics
-# opencv-python-headless
-# torch
-# torchvision
-# numpy
-# pillow
-# python-multipart
-
-
 fastapi
 uvicorn
 ultralytics
-opencv-python-headless
+opencv-python
+easyocr
+deep_translator
+requests
 numpy
-pillow
-python-multipart
 torch
 torchvision
-# jjjjj
+python-multipart
