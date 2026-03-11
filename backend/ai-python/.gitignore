@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+venv/
+detected_frames/
+*.log
+*.mp4
