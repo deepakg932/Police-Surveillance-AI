@@ -1,3 +1,33 @@
+// const express = require("express");
+// const cors = require("cors");
+// require("dotenv").config();
+// const app = express();
+// const connectDB = require("./config/db");
+// app.use(cors());
+// app.use(express.json());
+// connectDB();
+
+// const authRoute =  require("./routes/authRoute.js")
+// const videoRoutes = require("./routes/videoRoute");
+
+
+// app.use("/api", uploadRoute);
+
+
+
+
+// app.use(express.json({ limit: "500mb" }));
+// app.use(express.urlencoded({ limit: "500mb", extended: true }));
+// app.use("/api-auth",authRoute)
+
+// app.use("/api/video", videoRoutes);
+
+// // test route
+// app.get("/", (req, res) => {
+//   res.send("Backend running 🚀");
+// });
+
+// app.listen(5000, () => console.log("Server running on port 5000"));
 
 
 const express = require("express");
@@ -7,7 +37,6 @@ const path = require("path")
 
 const app = express();
 const connectDB = require("./config/db");
-
 
 connectDB();
 
@@ -21,7 +50,6 @@ app.use(express.urlencoded({ limit: "500mb", extended: true }));
 // routes
 const authRoute = require("./routes/authRoute.js");
 const videoRoutes = require("./routes/videoRoute");
-app.use(cors())
 
 // auth routes
 app.use("/api-auth", authRoute);
@@ -36,17 +64,4 @@ app.get("/", (req, res) => {
   res.send("Backend running 🚀");
 });
 
-
-let port = process.env.PORT || 5000
-
-
-const server = app.listen(port, () =>
-  console.log("Server running on port 5000")
-);
-
-// important
-server.timeout = 10 * 60 * 1000; // 10 minutes
-server.keepAliveTimeout = 10 * 60 * 1000;
-server.headersTimeout = 10 * 60 * 1000;
-// console.log(port,"kkk")
-// app.listen(port, () => console.log("Server running on port 5000"));
+app.listen(5000, () => console.log("Server running on port 5000"));

@@ -1,13 +1,11 @@
 fastapi
 uvicorn
 ultralytics
-opencv-python
-easyocr
-deep_translator
-requests
-numpy
+opencv-python-headless
 torch
 torchvision
+numpy
+pillow
 python-multipart
-
-# kkkkkk
+google-generativeai
+python-dotenv

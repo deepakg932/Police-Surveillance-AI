@@ -2,9 +2,9 @@ const express = require("express");
 const router = express.Router();
 // const multer = require("multer");
 
-const { uploadAndProcess, searchDetections } = require("../Controllers/videoController.js")
+const { uploadAndProcess, searchDetections, askVideoQuestion } = require("../Controllers/videoController.js");
 const authMiddleware = require("../middleware/authMiddleware.js");
-const  multiUpload = require("../middleware/upload.js");
+const { multiUpload, singleVideoUpload } = require("../middleware/upload.js");
 
 // const storage = multer.diskStorage({
 //   destination: "uploads/",
@@ -27,7 +27,9 @@ const  multiUpload = require("../middleware/upload.js");
 
 
 // 🔐 protected routes
-router.post("/upload", multiUpload, uploadAndProcess);
-router.get("/search", searchDetections);
+router.post("/upload", authMiddleware, multiUpload, uploadAndProcess);
+router.get("/search", authMiddleware, searchDetections);
+// Video + prompt - AI apne prompt ke hisaab se detect/answer karega
+router.post("/ask", authMiddleware, singleVideoUpload, askVideoQuestion);
 
 module.exports = router;

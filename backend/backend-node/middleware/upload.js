@@ -15,9 +15,11 @@ const upload = multer({
 });
 
 const multiUpload = upload.fields([
-  { name: "file", maxCount: 1 },
+  { name: "file", maxCount: 5 },
   { name: "image", maxCount: 1 },
 ]);
 
-// ✅ EXPORT CORRECTLY
-module.exports = multiUpload;
+// Sirf video - /ask route ke liye
+const singleVideoUpload = upload.single("file");
+
+module.exports = { multiUpload, singleVideoUpload };
