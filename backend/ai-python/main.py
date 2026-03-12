@@ -633,7 +633,6 @@
 #     cap.release()
 #     return {"results": results_list}
 
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -644,14 +643,16 @@ import cv2
 import os
 import torch
 import numpy as np
+import requests
 from torchvision import models, transforms
 from PIL import Image
 
 app = FastAPI()
-# V2 model is better for dynamic prompts
+
+# 🚀 Model loading (V2 is better for dynamic prompts)
 model = YOLOWorld("yolov8s-worldv2.pt")
 
-# Feature Extractor (Image se video match karne ke liye)
+# 📸 Feature Extractor for image matching (ResNet50)
 resnet = models.resnet50(pretrained=True)
 resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
 resnet.eval()
@@ -659,6 +660,7 @@ resnet.eval()
 SAVE_DIR = "detected_frames"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
+# Image preprocessing for ResNet
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -674,39 +676,63 @@ def extract_features(img):
 @app.post("/process")
 async def process_video(req: Request):
     data = await req.json()
-    video_path = data.get("filePath")
-    image_path = data.get("imagePath")
+    
+    # 🎯 Node.js se ye URLs aur data aayenge
+    video_url = data.get("fileUrl") or data.get("videoUrl")
+    image_url = data.get("imageUrl") or data.get("imagePath")
     user_prompt = data.get("prompt", "person")
 
-    print(f"\n🚀 [START] Processing Started...")
-    print(f"📂 Video: {os.path.basename(video_path)}")
+    print(f"\n🚀 [START] Processing Task...")
+    print(f"🔗 Video URL: {video_url}")
     print(f"📝 Prompt: {user_prompt}")
 
+    if not video_url:
+        raise HTTPException(status_code=400, detail="Video URL missing")
+
+    # 1️⃣ Video Download Logic
+    video_local_path = "temp_video.mp4"
+    try:
+        r = requests.get(video_url, stream=True, timeout=10)
+        with open(video_local_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024*1024):
+                if chunk: f.write(chunk)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video download failed: {e}")
+
+    # 2️⃣ Image Download Logic (Matching ke liye)
+    image_local_path = None
+    if image_url and image_url.startswith("http"):
+        image_local_path = "temp_match.jpg"
+        r = requests.get(image_url, stream=True)
+        with open(image_local_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk: f.write(chunk)
+    elif image_url:
+        image_local_path = image_url # Local path if provided
+
+    # 3️⃣ YOLO Setup
     prompt_list = [p.strip() for p in user_prompt.split(",")]
     model.set_classes(prompt_list)
 
-    # Prompt ke hisaab se confidence - "person with helmet" jaisa composite = higher (galat detect kam)
+    # Threshold logic
     prompt_lower = user_prompt.lower()
-    if "helmet" in prompt_lower or "with" in prompt_lower or "wearing" in prompt_lower:
-        target_threshold = 0.55  # False positive kam - car/roof pe box na aaye
-    else:
-        target_threshold = 0.50
+    target_threshold = 0.55 if any(x in prompt_lower for x in ["helmet", "wearing"]) else 0.50
 
+    # Extract reference features if image exists
     ref_feat = None
-    if image_path and os.path.exists(image_path):
-        print(f"📸 Image provided for matching: {os.path.basename(image_path)}")
-        ref_img = cv2.imread(image_path)
-        ref_feat = extract_features(ref_img)
+    if image_local_path and os.path.exists(image_local_path):
+        ref_img = cv2.imread(image_local_path)
+        if ref_img is not None:
+            ref_feat = extract_features(ref_img)
 
-    cap = cv2.VideoCapture(video_path)
+    # 4️⃣ Video Processing Loop
+    cap = cv2.VideoCapture(video_local_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    duration_sec = total_frames / fps if fps > 0 else 0
-
-    # Short video = zyada frames process karo - person helmet miss na ho
-    frame_interval = 2 if duration_sec < 15 else 5
-    print(f"🎞️ Frames: {total_frames} | Duration: {duration_sec:.1f}s | Interval: every {frame_interval} frames | Conf: {target_threshold}")
-
+    
+    # Frame skipping logic for speed
+    frame_interval = 3 if (total_frames / fps) < 15 else 6
+    
     results_list = []
     saved_ids = set()
     frame_id = 0
@@ -716,22 +742,17 @@ async def process_video(req: Request):
         if not ret: break
         frame_id += 1
 
-        if frame_id % frame_interval != 0:
-            continue 
+        if frame_id % frame_interval != 0: continue 
 
-        # 🎯 OPTIMIZATION: imgsz=640 and half=True (Speed optimized)
-        # Device automatically handles CPU/GPU
+        # 🎯 Inference with Speed Optimization
         results = model.track(
             frame, 
             conf=target_threshold, 
-            imgsz=1280, # 1280 se 640 kiya for 2x speed
+            imgsz=640, 
             persist=True, 
             verbose=False,
             half=True if torch.cuda.is_available() else False 
         )
-
-        if frame_id % 50 == 0:
-            print(f"⏳ Progress: {frame_id}/{total_frames} frames processed...")
 
         if not results[0].boxes or results[0].boxes.id is None: continue
 
@@ -741,24 +762,26 @@ async def process_video(req: Request):
         clss = results[0].boxes.cls.int().cpu().numpy()
 
         for box, track_id, conf, cls_id in zip(boxes, ids, confs, clss):
-            if conf < target_threshold: continue
             if track_id in saved_ids: continue
 
             x1, y1, x2, y2 = map(int, box)
             label = prompt_list[cls_id]
 
-            # Image Matching Logic
+            # 🧩 Image Matching (Similarity) logic
             if ref_feat is not None:
                 crop = frame[max(0, y1):y2, max(0, x1):x2]
                 if crop.size == 0: continue
                 obj_feat = extract_features(crop)
                 sim = np.dot(ref_feat, obj_feat) / (np.linalg.norm(ref_feat) * np.linalg.norm(obj_feat))
-                if sim < target_threshold: continue
+                if sim < 0.45: continue # Matching threshold
                 conf = sim 
 
-            print(f"✅ Found: {label} (ID: {track_id}) at Frame {frame_id}")
+            print(f"✅ Found: {label} (ID: {track_id})")
 
-            img_path = os.path.join(SAVE_DIR, f"track_{track_id}.jpg")
+            # Save Annotated Image
+            img_filename = f"track_{track_id}.jpg"
+            img_path = os.path.join(SAVE_DIR, img_filename)
+            
             annotated = frame.copy()
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(annotated, f"{label} {conf:.2f}", (x1, y1-10), 
@@ -771,52 +794,50 @@ async def process_video(req: Request):
                 "object": label,
                 "confidence": float(conf),
                 "trackingId": int(track_id),
-                "timestamp": str(frame_id),
+                "timestamp": str(round(frame_id / fps, 2)), # Seconds mein conversion
                 "image_path": img_path,
                 "bbox": [x1, y1, x2, y2]
             })
 
     cap.release()
-    print(f"🏁 [FINISHED] Total unique objects detected: {len(saved_ids)}")
-    return {"results": results_list}
+    print(f"🏁 [FINISHED] Detected: {len(saved_ids)} objects")
+    
+    return {
+        "videoUrl": video_url, 
+        "results": results_list,
+        "totalDetected": len(saved_ids)
+    }
 
-
-# ============ MULTIMODAL AI - Prompt-based Video Understanding ============
-# Video + jo bhi prompt do, AI uske according detect/answer karega
-
+# ============ MULTIMODAL AI SECTION ============
 
 class AskRequest(BaseModel):
     videoPath: str
+    videoUrl: str = "No URL Provided"
     prompt: str
-
 
 @app.post("/ask")
 async def ask_video(req: AskRequest):
-    """
-    Video + custom prompt. AI apne prompt ke hisaab se detect/answer karega.
-    Har video ke liye alag prompt de sakte ho - koi bhi type ka.
-    """
+    # Agar local path nahi hai toh download logic yahan bhi dal sakte ho
     if not os.path.exists(req.videoPath):
-        raise HTTPException(status_code=404, detail="Video not found")
+        raise HTTPException(status_code=404, detail="Video file not found locally")
 
     try:
         from services.video_processor import extract_frames
         from services.multimodal_client import ask_gemini
     except ImportError as e:
-        raise HTTPException(status_code=500, detail=f"Service import error: {e}")
+        raise HTTPException(status_code=500, detail=f"Service imports missing: {e}")
 
-    print(f"\n🎯 [ASK] Video: {os.path.basename(req.videoPath)}")
-    print(f"📝 Prompt: {req.prompt[:80]}...")
-
-    frames = extract_frames(
-        req.videoPath,
-        max_frames=12,
-        max_width=720,
-        jpeg_quality=85,
-    )
+    frames = extract_frames(req.videoPath, max_frames=12)
     if not frames:
-        raise HTTPException(status_code=400, detail="Could not extract frames from video")
+        raise HTTPException(status_code=400, detail="Could not extract frames")
 
     answer = ask_gemini(frames, req.prompt)
-    print(f"✅ Answer length: {len(answer)} chars")
-    return {"answer": answer, "frameCount": len(frames)}
+    return {
+        "answer": answer, 
+        "videoUrl": req.videoUrl, 
+        "frameCount": len(frames)
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -5,6 +5,7 @@ const detectionSchema = new mongoose.Schema({
   imageName: String,
     imagePath: String, // path to saved image
   textNote: String,
+  videoUrl: String, // 🎯 Added this field
 
   object: String,
     // upperColor: String, // color field for persons

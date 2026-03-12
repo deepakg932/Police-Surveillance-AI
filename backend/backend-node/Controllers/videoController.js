@@ -521,8 +521,6 @@ exports.searchDetections = async (req, res) => {
 //   }
 // };
 
-
-
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
@@ -530,53 +528,71 @@ exports.uploadAndProcess = async (req, res) => {
     const userPrompt = req.body.text || "person, car";
 
     if (!videoFile) return res.status(400).json({ message: "Video missing" });
-    
+
     const startTime = Date.now();
-    const videoPath = path.resolve(videoFile.path);
-    const imagePath = imageFile ? path.resolve(imageFile.path) : null;
     const BASE_URL = process.env.BASE_URL;
 
-    // 🎯 Video URL Construct karein
+    // 🎯 Public URLs generate karein
     const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
+    const imageUrl = imageFile ? `${BASE_URL}/uploads/${imageFile.filename}` : null;
 
-    const response = await axios.post(`${process.env.PYTHON_API_URL}/process`, {
-      filePath: videoPath,
-      imagePath: imagePath,
-      prompt: userPrompt,
-    });
+    console.log("📤 Sending to Python -> Video:", videoUrl);
 
-    const endTime = Date.now();
-    const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
-    const processingTimeStr = `${durationSeconds}s`;
-
-    const detections = (response.data.results || []).filter(
-      (d) => d.confidence >= 0.20
+    // 🚀 Python ko call kar rahe hain
+    const response = await axios.post(
+      `${process.env.PYTHON_API_URL}/process`,
+      {
+        fileUrl: videoUrl,   // Python isi key ko dhoondega
+        imageUrl: imageUrl, 
+        prompt: userPrompt,
+      },
+      { timeout: 0 } // No timeout for long videos
     );
 
-    // ... (Aapka existing keyword counting aur DB insertion logic yahan rahega) ...
+    const endTime = Date.now();
+    const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
+
+    // Filter detections (Minimum 0.60 confidence)
+    const detections = (response.data.results || []).filter(d => d.confidence >= 0.60);
+
+    // 💾 Database Insertion Logic
+    if (detections.length > 0) {
+      await Detection.insertMany(
+        detections.map((d) => {
+          const cleanPath = d.image_path.replace(/\\/g, "/");
+          return {
+            fileName: videoFile.filename,
+            videoUrl: videoUrl, // 🎯 DB mein save ho raha hai
+            textNote: userPrompt,
+            object: d.object,
+            confidence: d.confidence,
+            timestamp: d.timestamp,
+            trackingId: d.trackingId.toString(),
+            bbox: d.bbox,
+            imagePath: cleanPath,
+            screenshotUrl: `${BASE_URL}/${cleanPath}`,
+            processingTime: processingTimeStr,
+          };
+        })
+      );
+    }
 
     return res.json({
       message: "Success",
-      videoUrl: videoUrl, // 🚀 Response mein Video URL add kiya
+      videoUrl: videoUrl, 
       processing_time: processingTimeStr,
-      mode: imageFile ? "Image Search" : "Text Search",
-      counts: finalCounts,
-      totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
-      results: detections.map((d) => {
-        const cleanPath = d.image_path.replace(/\\/g, "/");
-        return {
-          ...d,
-          screenshotUrl: `${BASE_URL}/${cleanPath}`,
-        };
-      }),
+      results: detections.map((d) => ({
+        ...d,
+        screenshotUrl: `${BASE_URL}/${d.image_path.replace(/\\/g, "/")}`,
+      })),
     });
+
   } catch (err) {
-    console.error("❌ ERROR:", err.message);
+    console.error("❌ Node Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 };
-// ============ MULTIMODAL AI - Prompt-based Video Understanding ============
-// Video + jo bhi prompt do, AI uske according detect/answer karega
+// ============ MULTIMODAL AI - Ask API Updated ============
 exports.askVideoQuestion = async (req, res) => {
   try {
     const videoFile = req.file || req.files?.file?.[0];
@@ -587,18 +603,23 @@ exports.askVideoQuestion = async (req, res) => {
     const videoPath = path.resolve(videoFile.path);
     const BASE_URL = process.env.BASE_URL;
     
-    // 🎯 Video URL Construct karein
+    // 🎯 Video URL Construct kiya
     const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
 
+    // 🚀 Python ko videoPath aur videoUrl dono bhej rahe hain
     const response = await axios.post(
       `${process.env.PYTHON_API_URL}/ask`,
-      { videoPath, prompt },
+      { 
+        videoPath: videoPath, 
+        videoUrl: videoUrl, // NEW: Added for python logging
+        prompt: prompt 
+      },
       { timeout: 300000 } 
     );
 
     return res.json({
       message: "Success",
-      videoUrl: videoUrl, // 🚀 Yahan bhi Video URL add kiya
+      videoUrl: videoUrl,
       answer: response.data.answer,
       frameCount: response.data.frameCount,
     });
