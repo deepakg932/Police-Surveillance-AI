@@ -10,7 +10,7 @@ exports.searchDetections = async (req, res) => {
     // 1. Filter Setup (Regex for dynamic search)
     if (object) filter.object = { $regex: object, $options: "i" };
     if (textNote) filter.textNote = { $regex: textNote, $options: "i" };
-    if (trackingId) filter.trackingId = trackingId.toString();
+    if (trackingId) filter.trackingId = trackingId;
     if (fileName) filter.fileName = fileName;
 
     // 2. Database se results nikaalo
@@ -26,14 +26,13 @@ exports.searchDetections = async (req, res) => {
     }
 
     const finalCounts = {};
-const baseText = object || results?.[0]?.textNote || "";
-    
-const searchTerms = baseText
-  .toLowerCase()
-  .split(/[\s,]+/)
-  .filter(
-    (w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w)
-  );
+
+    const searchTerms = (object || results[0].textNote || "")
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(
+        (w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w),
+      );
 
     searchTerms.forEach((key) => {
       const uniqueSetForTerm = new Set();
@@ -392,8 +391,7 @@ console.log("IMAGE URL SENT:", imageUrl);
     console.log(processingTimeStr, "ssssssss");
 
     const detections = (response.data.results || []).filter(
-      // (d) => d.confidence >= 0.60,
-        (d) => d.confidence >= 0.4,
+      (d) => d.confidence >= 0.60,
     );
     const BASE_URL = process.env.BASE_URL;
     // const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
@@ -431,8 +429,7 @@ console.log("IMAGE URL SENT:", imageUrl);
     if (detections.length > 0) {
       await Detection.insertMany(
         detections.map((d) => {
-          const cleanPath = (d.image_path || "").replace(/\\/g, "/");
-          // const cleanPath = d.image_path.replace(/\\/g, "/");
+          const cleanPath = d.image_path.replace(/\\/g, "/");
 
           return {
             fileName: videoFile.filename,
