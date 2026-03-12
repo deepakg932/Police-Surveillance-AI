@@ -175,6 +175,7 @@
 
 
 
+
 from fastapi import FastAPI, Request
 from ultralytics import YOLOWorld
 import cv2
@@ -184,7 +185,7 @@ import numpy as np
 import requests
 from torchvision import models, transforms
 from PIL import Image
-import easyocr
+
 
 app = FastAPI()
 
@@ -193,9 +194,6 @@ model = YOLOWorld("yolov8s-worldv2.pt")
 
 SAVE_DIR = "detected_frames"
 os.makedirs(SAVE_DIR, exist_ok=True)
-
-# OCR Reader
-reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
 
 # -----------------------------
 # FEATURE EXTRACTOR
@@ -211,11 +209,13 @@ transform = transforms.Compose([
                          std=[0.229,0.224,0.225])
 ])
 
+
 def extract_features(img):
     img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     img = transform(img).unsqueeze(0)
     with torch.no_grad():
         return resnet(img).flatten().numpy()
+
 
 # -----------------------------
 # COLOR DETECTION
@@ -229,48 +229,27 @@ def get_basic_color(crop):
 
     if r > 150 and g < 100 and b < 100:
         return "red"
+
     if g > 150 and r < 100 and b < 100:
         return "green"
+
     if b > 150 and r < 100 and g < 100:
         return "blue"
+
     if r > 200 and g > 200 and b < 100:
         return "yellow"
+
     if r > 200 and g > 200 and b > 200:
         return "white"
+
     if r < 80 and g < 80 and b < 80:
         return "black"
+
     if r > 160 and g > 110 and b > 60:
         return "brown"
 
     return "unknown"
 
-# -----------------------------
-# NUMBER PLATE OCR
-# -----------------------------
-def detect_number_plate(crop):
-
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-
-    results = reader.readtext(gray)
-
-    plates = []
-
-    for (bbox, text, prob) in results:
-
-        text = text.replace(" ","").upper()
-
-        if prob > 0.4:
-            plates.append(text)
-
-    return plates
-
-# -----------------------------
-# VEHICLE CLASSES
-# -----------------------------
-vehicle_classes = [
-    "car","truck","bus","motorcycle",
-    "bike","van","auto rickshaw"
-]
 
 # -----------------------------
 # CORE CLASSES
@@ -285,6 +264,7 @@ core_classes = [
     "person running","person fighting",
     "person falling","person lying on road"
 ]
+
 
 # -----------------------------
 # VIDEO PROCESS API
@@ -336,14 +316,22 @@ async def process_video(req: Request):
     prompt_list = [p.strip().lower() for p in user_prompt.split(",")]
 
     all_classes = list(set(core_classes + prompt_list))
+
     model.set_classes(all_classes)
 
+    print("Detection Classes:",all_classes)
+
+    # -----------------------------
+    # VIDEO READ
+    # -----------------------------
     cap = cv2.VideoCapture(video_path)
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
     print("Total Frames:",total_frames)
 
     frame_id = 0
+
     results_list = []
     saved_ids = set()
 
@@ -361,6 +349,7 @@ async def process_video(req: Request):
 
         frame_id += 1
 
+        # frame skipping for speed
         if frame_id % 4 != 0:
             continue
 
@@ -390,6 +379,10 @@ async def process_video(req: Request):
 
             label = model.names[cls_id]
 
+            # prompt filtering
+            if not any(p in label.lower() for p in prompt_list):
+                continue
+
             x1,y1,x2,y2 = map(int,box)
 
             crop = frame[max(0,y1):y2, max(0,x1):x2]
@@ -397,33 +390,7 @@ async def process_video(req: Request):
             if crop.size == 0:
                 continue
 
-            # -----------------------------
-            # OCR FOR VEHICLES
-            # -----------------------------
-            plate_numbers = []
-
-            if label in vehicle_classes:
-
-                plate_numbers = detect_number_plate(crop)
-
-                for plate in plate_numbers:
-                    print("🚗 PLATE:",plate)
-
-            # -----------------------------
-            # PROMPT FILTER
-            # -----------------------------
-            plate_match = False
-
-            for plate in plate_numbers:
-                if any(p in plate.lower() for p in prompt_list):
-                    plate_match = True
-
-            if not any(p in label.lower() for p in prompt_list) and not plate_match:
-                continue
-
-            # -----------------------------
-            # IMAGE MATCHING
-            # -----------------------------
+            # image matching
             if ref_feat is not None:
 
                 obj_feat = extract_features(crop)
@@ -437,17 +404,18 @@ async def process_video(req: Request):
 
                 conf = sim
 
+            # color detection
             color = get_basic_color(crop)
+
+            print(f"FOUND {label} {color} ID:{track_id} frame:{frame_id}")
 
             annotated = frame.copy()
 
             cv2.rectangle(annotated,(x1,y1),(x2,y2),(0,255,0),2)
 
-            plate_text = ",".join(plate_numbers) if plate_numbers else ""
-
             cv2.putText(
                 annotated,
-                f"{label} {color} {plate_text}",
+                f"{label} {color} {conf:.2f}",
                 (x1,y1-10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -456,6 +424,7 @@ async def process_video(req: Request):
             )
 
             img_path = os.path.join(SAVE_DIR,f"track_{track_id}.jpg")
+
             cv2.imwrite(img_path,annotated)
 
             saved_ids.add(track_id)
@@ -463,7 +432,6 @@ async def process_video(req: Request):
             results_list.append({
                 "object":label,
                 "color":color,
-                "plate":plate_numbers,
                 "confidence":float(conf),
                 "trackingId":int(track_id),
                 "timestamp":frame_id,
@@ -475,4 +443,6 @@ async def process_video(req: Request):
 
     print("FINISHED - objects:",len(saved_ids))
 
-    return {"results":results_list}
+    return {
+        "results":results_list
+    }
