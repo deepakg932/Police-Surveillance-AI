@@ -4,7 +4,7 @@ const router = express.Router();
 
 const { uploadAndProcess, searchDetections, askVideoQuestion } = require("../Controllers/videoController.js");
 const authMiddleware = require("../middleware/authMiddleware.js");
-const { multiUpload, singleVideoUpload } = require("../middleware/upload.js");
+const { multiUpload} = require("../middleware/upload.js");
 
 // const storage = multer.diskStorage({
 //   destination: "uploads/",
@@ -30,6 +30,6 @@ const { multiUpload, singleVideoUpload } = require("../middleware/upload.js");
 router.post("/upload", authMiddleware, multiUpload, uploadAndProcess);
 router.get("/search", authMiddleware, searchDetections);
 // Video + prompt - AI apne prompt ke hisaab se detect/answer karega
-router.post("/ask", authMiddleware, singleVideoUpload, askVideoQuestion);
+
 
 module.exports = router;
