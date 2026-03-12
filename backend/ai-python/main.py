@@ -211,6 +211,30 @@ def extract_features(img):
     with torch.no_grad():
         return resnet(img).flatten().numpy()
 
+# Core classes list
+core_classes = [
+    # Humans
+    "person", "man", "woman", "child",
+
+    # Two wheelers
+    "bicycle", "motorcycle", "scooter", "bike rider", "cyclist",
+
+    # Vehicles
+    "car", "truck", "bus", "van", "auto rickshaw",
+
+    # Safety gear
+    "helmet", "safety helmet", "motorcycle helmet",
+
+    # Traffic environment
+    "road", "traffic light", "traffic signal", "crosswalk", "lane",
+
+    # Police / surveillance related
+    "police officer", "security guard",
+
+    # Suspicious actions
+    "person running", "person fighting", "person falling", "person lying on road"
+]
+
 @app.post("/process")
 async def process_video(req: Request):
     data = await req.json()
@@ -226,7 +250,6 @@ async def process_video(req: Request):
 
     # download video
     video_path = "temp_video.mp4"
-
     if video_url:
         r = requests.get(video_url, stream=True)
         with open(video_path, "wb") as f:
@@ -246,7 +269,8 @@ async def process_video(req: Request):
 
     target_threshold = 0.35
     prompt_list = [p.strip() for p in user_prompt.split(",")]
-    model.set_classes(prompt_list)
+    # Merge core classes + user prompt, remove duplicates
+    model.set_classes(list(set(core_classes + prompt_list)))
 
     ref_feat = None
     if image_path and os.path.exists(image_path):
@@ -265,16 +289,16 @@ async def process_video(req: Request):
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
-        
-        # 🏎️ SPEED BOOST: Har 5th frame skip ki jagah, hum logic ko fast karenge
-        if frame_id % 5 != 0: continue 
 
-        # 🎯 OPTIMIZATION: imgsz=640 and half=True (Speed optimized)
-        # Device automatically handles CPU/GPU
+        # Frame skipping optimization (process every 4th frame)
+        if frame_id % 4 != 0: 
+            continue 
+
+        # Optimized inference
         results = model.track(
             frame, 
             conf=target_threshold, 
-            imgsz=640, # 1280 se 640 kiya for 2x speed
+            imgsz=960,  # updated resolution
             persist=True, 
             verbose=False,
             half=True if torch.cuda.is_available() else False 
@@ -283,7 +307,8 @@ async def process_video(req: Request):
         if frame_id % 50 == 0:
             print(f"⏳ Progress: {frame_id}/{total_frames} frames processed...")
 
-        if not results[0].boxes or results[0].boxes.id is None: continue
+        if not results[0].boxes or results[0].boxes.id is None: 
+            continue
 
         boxes = results[0].boxes.xyxy.cpu().numpy()
         ids = results[0].boxes.id.int().cpu().numpy()
@@ -295,7 +320,7 @@ async def process_video(req: Request):
             if track_id in saved_ids: continue
 
             x1, y1, x2, y2 = map(int, box)
-            label = prompt_list[cls_id]
+            label = model.names[cls_id]
 
             # Image Matching Logic
             if ref_feat is not None:
