@@ -261,6 +261,7 @@ core_classes = [
     "helmet","safety helmet",
     "traffic light","crosswalk","lane",
     "police officer","security guard",
+    "rider",
     "person running","person fighting",
     "person falling","person lying on road"
 ]
