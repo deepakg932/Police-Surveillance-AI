@@ -176,7 +176,6 @@
 
 
 
-
 from fastapi import FastAPI, Request
 from ultralytics import YOLOWorld
 import cv2
@@ -186,6 +185,7 @@ import numpy as np
 import requests
 from torchvision import models, transforms
 from PIL import Image
+import webcolors   # 🎨 Color mapping
 
 app = FastAPI()
 # V2 model is better for dynamic prompts
@@ -211,27 +211,49 @@ def extract_features(img):
     with torch.no_grad():
         return resnet(img).flatten().numpy()
 
+# 🎨 Color detection helpers
+def closest_color(requested_color):
+    min_colors = {}
+    for key, name in webcolors.CSS3_HEX_TO_NAMES.items():
+        r_c, g_c, b_c = webcolors.hex_to_rgb(key)
+        rd = (r_c - requested_color[0]) ** 2
+        gd = (g_c - requested_color[1]) ** 2
+        bd = (b_c - requested_color[2]) ** 2
+        min_colors[(rd + gd + bd)] = name
+    return min_colors[min(min_colors.keys())]
+
+def get_basic_color(crop):
+    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+    avg_color = crop_rgb.mean(axis=0).mean(axis=0)  # average per channel
+    r, g, b = avg_color.astype(int)
+
+    # Simple thresholds for basic colors
+    if r > 150 and g < 100 and b < 100:
+        return "red"
+    elif g > 150 and r < 100 and b < 100:
+        return "green"
+    elif b > 150 and r < 100 and g < 100:
+        return "blue"
+    elif r > 200 and g > 200 and b < 100:
+        return "yellow"
+    elif r > 200 and g > 200 and b > 200:
+        return "white"
+    elif r < 80 and g < 80 and b < 80:
+        return "black"
+    elif r > 160 and g > 110 and b > 60:
+        return "brown"
+    else:
+        return "unknown"
+
+
 # Core classes list
 core_classes = [
-    # Humans
     "person", "man", "woman", "child",
-
-    # Two wheelers
     "bicycle", "motorcycle", "scooter", "bike rider", "cyclist",
-
-    # Vehicles
     "car", "truck", "bus", "van", "auto rickshaw",
-
-    # Safety gear
     "helmet", "safety helmet", "motorcycle helmet",
-
-    # Traffic environment
     "road", "traffic light", "traffic signal", "crosswalk", "lane",
-
-    # Police / surveillance related
     "police officer", "security guard",
-
-    # Suspicious actions
     "person running", "person fighting", "person falling", "person lying on road"
 ]
 
@@ -269,7 +291,6 @@ async def process_video(req: Request):
 
     target_threshold = 0.35
     prompt_list = [p.strip() for p in user_prompt.split(",")]
-    # Merge core classes + user prompt, remove duplicates
     model.set_classes(list(set(core_classes + prompt_list)))
 
     ref_feat = None
@@ -298,7 +319,7 @@ async def process_video(req: Request):
         results = model.track(
             frame, 
             conf=target_threshold, 
-            imgsz=960,  # updated resolution
+            imgsz=960,  
             persist=True, 
             verbose=False,
             half=True if torch.cuda.is_available() else False 
@@ -322,21 +343,25 @@ async def process_video(req: Request):
             x1, y1, x2, y2 = map(int, box)
             label = model.names[cls_id]
 
+            crop = frame[max(0, y1):y2, max(0, x1):x2]
+            if crop.size == 0: continue
+
             # Image Matching Logic
             if ref_feat is not None:
-                crop = frame[max(0, y1):y2, max(0, x1):x2]
-                if crop.size == 0: continue
                 obj_feat = extract_features(crop)
                 sim = np.dot(ref_feat, obj_feat) / (np.linalg.norm(ref_feat) * np.linalg.norm(obj_feat))
                 if sim < target_threshold: continue
                 conf = sim 
 
-            print(f"✅ Found: {label} (ID: {track_id}) at Frame {frame_id}")
+            # 🎨 Color detection
+            detected_color = get_basic_color(crop)
+
+            print(f"✅ Found: {label} ({detected_color}) (ID: {track_id}) at Frame {frame_id}")
 
             img_path = os.path.join(SAVE_DIR, f"track_{track_id}.jpg")
             annotated = frame.copy()
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(annotated, f"{label} {conf:.2f}", (x1, y1-10), 
+            cv2.putText(annotated, f"{label} {detected_color} {conf:.2f}", (x1, y1-10), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
             cv2.imwrite(img_path, annotated)
@@ -344,6 +369,7 @@ async def process_video(req: Request):
             
             results_list.append({
                 "object": label,
+                "color": detected_color,
                 "confidence": float(conf),
                 "trackingId": int(track_id),
                 "timestamp": str(frame_id),
@@ -354,3 +380,4 @@ async def process_video(req: Request):
     cap.release()
     print(f"🏁 [FINISHED] Total unique objects detected: {len(saved_ids)}")
     return {"results": results_list}
+
