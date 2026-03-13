@@ -66,342 +66,53 @@ exports.searchDetections = async (req, res) => {
   }
 };
 
-//yh wali api sahi h abhi chl ri h
-// exports.uploadAndProcess = async (req, res) => {
-//   try {
-//     const videoFile = req.files?.file?.[0];
-//     console.log(videoFile,"kkkkkkkkkkkkkkkk")
-//     // User input: e.g., "blue car, person with helmet, dog"
-//     const userPrompt = req.body.text || "person, vehicle, helmet";
-//     console.log(userPrompt,"jjjjjjjjjjj")
-
-//     if (!videoFile) return res.status(400).json({ message: "Video missing" });
-
-//     const filePath = path.resolve(videoFile.path);
-
-//     // Python call with prompt
-//     const response = await axios.post("http://127.0.0.1:8000/process", {
-//       filePath: filePath,
-//       prompt: userPrompt,
-//     });
-
-//     const detections = response.data.results || [];
-
-//     // Save to MongoDB
-//     const savedData = await Detection.insertMany(
-//       detections.map((d) => ({
-//         fileName: videoFile.filename,
-//         textNote: userPrompt,
-//         object: d.object,
-//         confidence: d.confidence,
-//         timestamp: d.timestamp,
-//         trackingId: d.trackingId,
-//         bbox: d.bbox
-//       }))
-//     );
-
-//     return res.json({
-//       message: "Success",
-//       totalObjects: new Set(detections.map(d => d.trackingId)).size,
-//       results: detections,
-//     });
-
-//   } catch (err) {
-//     console.error("❌ ERROR:", err.message);
-//     return res.status(500).json({ error: err.message });
-//   }
-// };
-
-//2nd api sahi bhaii
-// exports.uploadAndProcess = async (req, res) => {
-//   try {
-//     const videoFile = req.files?.file?.[0];
-//     console.log(videoFile, "ppppppppppp");
-//     const imageFile = req.files?.image?.[0]; // Optional Image
-//     console.log(imageFile, "mmmmmmmmmmm");
-//     const userPrompt = req.body.text || "person, car";
-//     console.log(userPrompt, "oooooooooooo");
-
-//     if (!videoFile) return res.status(400).json({ message: "Video missing" });
-//     const startTime = Date.now();
-//     console.log(startTime, "startt");
-
-//     const videoPath = path.resolve(videoFile.path);
-//     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
-
-//     const response = await axios.post("http://127.0.0.1:8000/process", {
-//       filePath: videoPath,
-//       imagePath: imagePath,
-//       prompt: userPrompt,
-//    }, { timeout: 600000 }); //
-
-//     // const detections = response.data.results || [];
-//     const endTime = Date.now();
-//     console.log(endTime, "hhhhhh");
-
-//     const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
-//     console.log(durationSeconds, "startkkk");
-//     const processingTimeStr = `${durationSeconds}s`;
-//     console.log(processingTimeStr, "ssssssss");
-
-//     const detections = (response.data.results || []).filter(
-//       (d) => d.confidence >= 0.6,
-//     );
-//     // const BASE_URL = "http://localhost:5000";
-//     const BASE_URL = "https://75w2s5b8-5000.inc1.devtunnels.ms"
-//     console.log(BASE_URL,"kkkk")
-
-//     const finalCounts = {};
-
-//     const keywords = userPrompt
-//       .toLowerCase()
-//       .split(/[\s,]+/)
-//       .filter((w) => !["with", "and", "wearing", "in", "a"].includes(w));
-
-//     keywords.forEach((key) => {
-//       const uniqueSet = new Set();
-//       detections.forEach((d) => {
-//         if (d.object.toLowerCase().includes(key)) {
-//           uniqueSet.add(d.trackingId);
-//         }
-//       });
-//       finalCounts[`total_${key}`] = uniqueSet.size;
-//     });
-
-//     // if (detections.length > 0) {
-//     //   await Detection.insertMany(detections.map(d => (
-//     //     {
-//     //     fileName: videoFile.filename,
-//     //     textNote: userPrompt,
-//     //     object: d.object,
-//     //     confidence: d.confidence,
-//     //     timestamp: d.timestamp,
-//     //     trackingId: d.trackingId,
-//     //     bbox: d.bbox,
-//     //     image_path: d.image_path
-//     //   })));
-//     // }
-//     if (detections.length > 0) {
-//       await Detection.insertMany(
-//         detections.map((d) => {
-//           const cleanPath = d.image_path.replace(/\\/g, "/");
-
-//           return {
-//             fileName: videoFile.filename,
-//             textNote: userPrompt,
-//             object: d.object,
-//             confidence: d.confidence,
-//             timestamp: d.timestamp,
-//             trackingId: d.trackingId.toString(), // String mein convert karna safe hai
-//             bbox: d.bbox,
-//             imagePath: cleanPath, // DB field: imagePath
-//             screenshotUrl: `${BASE_URL}/${cleanPath}`, // 🎯 DB field: screenshotUrl (AB SAVE HOGA)
-//             processingTime: processingTimeStr,
-//           };
-//         }),
-//       );
-
-//     }
-//     return res.json({
-//       message: "Success",
-//       processing_time: processingTimeStr,
-//       mode: imageFile ? "Image Search" : "Text Search",
-//       counts: finalCounts, // e.g., { total_person: 5, total_helmet: 5 }
-//       totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
-//       // results: detections.map(d => ({
-//       //   ...d,
-//       //   screenshotUrl: `http://localhost:5000/${d.image_path}`
-//       // }))
-//       results: detections.map((d) => {
-//         const cleanPath = d.image_path.replace(/\\/g, "/");
-//         return {
-//           ...d,
-//           screenshotUrl: `${BASE_URL}/${cleanPath}`,
-//         };
-//       }),
-//     });
-//   } catch (err) {
-//     console.error("❌ ERROR:", err.message);
-//     return res.status(500).json({ error: err.message });
-//   }
-// };
-
-// exports.uploadAndProcess = async (req, res) => {
-//   try {
-//     const videoFile = req.files?.file?.[0];
-//     console.log(videoFile, "ppppppppppp");
-//     const imageFile = req.files?.image?.[0]; // Optional Image
-//     console.log(imageFile, "mmmmmmmmmmm");
-//     const userPrompt = req.body.text || "person, car";
-//     console.log(userPrompt, "oooooooooooo");
-
-//     if (!videoFile) return res.status(400).json({ message: "Video missing" });
-//     const startTime = Date.now();
-//     console.log(startTime, "startt");
-
-//     const videoPath = path.resolve(videoFile.path);
-//     const imagePath = imageFile ? path.resolve(imageFile.path) : null;
-
-//     const response = await axios.post(`${process.env.PYTHON_API_URL}/process`, {
-//       filePath: videoPath,
-//       imagePath: imagePath,
-//       prompt: userPrompt,
-//     });
-
-//     // const detections = response.data.results || [];
-//     const endTime = Date.now();
-//     console.log(endTime, "hhhhhh");
-
-//     const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
-//     console.log(durationSeconds, "startkkk");
-//     const processingTimeStr = `${durationSeconds}s`;
-//     console.log(processingTimeStr, "ssssssss");
-
-//     const detections = (response.data.results || []).filter(
-//       (d) => d.confidence >= 0.6,
-//     );
-//     const BASE_URL = "http://localhost:5000";
-
-//     const finalCounts = {};
-
-//     const keywords = userPrompt
-//       .toLowerCase()
-//       .split(/[\s,]+/)
-//       .filter((w) => !["with", "and", "wearing", "in", "a"].includes(w));
-
-//     keywords.forEach((key) => {
-//       const uniqueSet = new Set();
-//       detections.forEach((d) => {
-//         if (d.object.toLowerCase().includes(key)) {
-//           uniqueSet.add(d.trackingId);
-//         }
-//       });
-//       finalCounts[`total_${key}`] = uniqueSet.size;
-//     });
-
-//     // if (detections.length > 0) {
-//     //   await Detection.insertMany(detections.map(d => (
-//     //     {
-//     //     fileName: videoFile.filename,
-//     //     textNote: userPrompt,
-//     //     object: d.object,
-//     //     confidence: d.confidence,
-//     //     timestamp: d.timestamp,
-//     //     trackingId: d.trackingId,
-//     //     bbox: d.bbox,
-//     //     image_path: d.image_path
-//     //   })));
-//     // }
-//     if (detections.length > 0) {
-//       await Detection.insertMany(
-//         detections.map((d) => {
-//           const cleanPath = d.image_path.replace(/\\/g, "/");
-
-//           return {
-//             fileName: videoFile.filename,
-//             textNote: userPrompt,
-//             object: d.object,
-//             confidence: d.confidence,
-//             timestamp: d.timestamp,
-//             trackingId: d.trackingId.toString(), // String mein convert karna safe hai
-//             bbox: d.bbox,
-//             imagePath: cleanPath, // DB field: imagePath
-//             screenshotUrl: `${BASE_URL}/${cleanPath}`, // 🎯 DB field: screenshotUrl (AB SAVE HOGA)
-//             processingTime: processingTimeStr,
-//           };
-//         }),
-//       );
-
-//     }
-//     return res.json({
-//       message: "Success",
-//       processing_time: processingTimeStr,
-//       mode: imageFile ? "Image Search" : "Text Search",
-//       counts: finalCounts, // e.g., { total_person: 5, total_helmet: 5 }
-//       totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
-//       // results: detections.map(d => ({
-//       //   ...d,
-//       //   screenshotUrl: `http://localhost:5000/${d.image_path}`
-//       // }))
-//       results: detections.map((d) => {
-//         const cleanPath = d.image_path.replace(/\\/g, "/");
-//         return {
-//           ...d,
-//           screenshotUrl: `${BASE_URL}/${cleanPath}`,
-//         };
-//       }),
-//     });
-//   } catch (err) {
-//     console.error("❌ ERROR:", err.message);
-//     return res.status(500).json({ error: err.message });
-//   }
-// };
-
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
-    console.log(videoFile, "ppppppppppp");
-    const imageFile = req.files?.image?.[0]; // Optional Image
-
+    const imageFile = req.files?.image?.[0]; 
     const userPrompt = req.body.text || "person, car";
-    console.log(userPrompt, "oooooooooooo");
 
     if (!videoFile) return res.status(400).json({ message: "Video missing" });
+    
     const startTime = Date.now();
-    console.log(startTime, "startt");
 
-    // const videoPath = path.resolve(videoFile.path);
+    // URLs for Python to download the files
     const videoUrl = `${process.env.BASE_URL}/uploads/${videoFile.filename}`;
-    console.log(videoUrl, "kkkkkkkkkkkkkkkkk");
-    const imagePath = imageFile ? path.resolve(imageFile.path) : null;
+    const imageUrl = imageFile 
+      ? `${process.env.BASE_URL}/uploads/${imageFile.filename}` 
+      : null;
 
-    // const response = await axios.post("http://127.0.0.1:8000/process", {
-    //   filePath: videoPath,
-    //   imagePath: imagePath,
-    //   prompt: userPrompt,
-
-    // });
-const imageUrl = imageFile
-  ? `${process.env.BASE_URL}/uploads/${imageFile.filename}`
-  : null;
-
-const response = await axios.post(
-  `${process.env.PYTHON_API_URL}/process`,
-  {
-    fileUrl: videoUrl,   // 👈 change
-    imageUrl: imageUrl,  // 👈 change
-    prompt: userPrompt,
-  },
-  {
-    timeout: 0,
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-  }
-);
-
-console.log("VIDEO URL SENT:", videoUrl);
-console.log("IMAGE URL SENT:", imageUrl);
-    // const detections = response.data.results || [];
-    const endTime = Date.now();
-    console.log(endTime, "hhhhhh");
-
-    const durationSeconds = ((endTime - startTime) / 1000).toFixed(2);
-    console.log(durationSeconds, "startkkk");
-    const processingTimeStr = `${durationSeconds}s`;
-    console.log(processingTimeStr, "ssssssss");
-
-    const detections = (response.data.results || []).filter(
-      (d) => d.confidence >= 0.60,
+    // Call Python API
+    const response = await axios.post(
+      `${process.env.PYTHON_API_URL}/process`,
+      {
+        fileUrl: videoUrl,
+        imageUrl: imageUrl,
+        prompt: userPrompt,
+      },
+      {
+        timeout: 0, // Important for long videos
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
     );
-    const BASE_URL = process.env.BASE_URL;
-    // const BASE_URL = "https://shirleen-capsular-irradiatingly.ngrok-free.dev";
 
+    const endTime = Date.now();
+    const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
+
+    // 🎯 UPDATE: Sync threshold with Python (Python uses 0.55, Node filters at 0.55)
+    const detections = (response.data.results || []).filter(
+      (d) => d.confidence >= 0.55 
+    );
+
+    const BASE_URL = process.env.BASE_URL;
     const finalCounts = {};
 
+    // Generate dynamic counts based on prompt keywords
     const keywords = userPrompt
       .toLowerCase()
       .split(/[\s,]+/)
-      .filter((w) => !["with", "and", "wearing", "in", "a"].includes(w));
+      .filter((w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w));
 
     keywords.forEach((key) => {
       const uniqueSet = new Set();
@@ -413,57 +124,39 @@ console.log("IMAGE URL SENT:", imageUrl);
       finalCounts[`total_${key}`] = uniqueSet.size;
     });
 
-    // if (detections.length > 0) {
-    //   await Detection.insertMany(detections.map(d => (
-    //     {
-    //     fileName: videoFile.filename,
-    //     textNote: userPrompt,
-    //     object: d.object,
-    //     confidence: d.confidence,
-    //     timestamp: d.timestamp,
-    //     trackingId: d.trackingId,
-    //     bbox: d.bbox,
-    //     image_path: d.image_path
-    //   })));
-    // }
+    // Save to MongoDB
     if (detections.length > 0) {
-      await Detection.insertMany(
-        detections.map((d) => {
-          const cleanPath = d.image_path.replace(/\\/g, "/");
-
-          return {
-            fileName: videoFile.filename,
-            textNote: userPrompt,
-            object: d.object,
-            confidence: d.confidence,
-            timestamp: d.timestamp,
-            trackingId: d.trackingId.toString(), // String mein convert karna safe hai
-            bbox: d.bbox,
-            imagePath: cleanPath, // DB field: imagePath
-            screenshotUrl: `${BASE_URL}/${cleanPath}`, // 🎯 DB field: screenshotUrl (AB SAVE HOGA)
-            processingTime: processingTimeStr,
-          };
-        }),
-      );
+      const detectionsToSave = detections.map((d) => {
+        const cleanPath = d.image_path.replace(/\\/g, "/");
+        return {
+          fileName: videoFile.filename,
+          textNote: userPrompt,
+          object: d.object,
+          confidence: d.confidence,
+          timestamp: d.timestamp,
+          trackingId: d.trackingId.toString(),
+          bbox: d.bbox,
+          imagePath: cleanPath,
+          screenshotUrl: `${BASE_URL}/${cleanPath}`,
+          processingTime: processingTimeStr,
+          videoUrl: videoUrl // Saved for reference
+        };
+      });
+      await Detection.insertMany(detectionsToSave);
     }
+
     return res.json({
       message: "Success",
       processing_time: processingTimeStr,
       mode: imageFile ? "Image Search" : "Text Search",
-      counts: finalCounts, // e.g., { total_person: 5, total_helmet: 5 }
+      counts: finalCounts,
       totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
-      // results: detections.map(d => ({
-      //   ...d,
-      //   screenshotUrl: `http://localhost:5000/${d.image_path}`
-      // }))
-      results: detections.map((d) => {
-        const cleanPath = d.image_path.replace(/\\/g, "/");
-        return {
-          ...d,
-          screenshotUrl: `${BASE_URL}/${cleanPath}`,
-        };
-      }),
+      results: detections.map((d) => ({
+        ...d,
+        screenshotUrl: `${BASE_URL}/${d.image_path.replace(/\\/g, "/")}`,
+      })),
     });
+
   } catch (err) {
     console.error("❌ ERROR:", err.message);
     return res.status(500).json({ error: err.message });
