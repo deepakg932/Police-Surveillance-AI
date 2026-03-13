@@ -1,3 +1,17 @@
+# fastapi
+# uvicorn
+# ultralytics
+# opencv-python-headless
+# torch
+# torchvision
+# numpy
+# pillow
+# python-multipart
+# google-generativeai
+# python-dotenv
+
+
+
 fastapi
 uvicorn
 ultralytics
@@ -6,6 +20,8 @@ torch
 torchvision
 numpy
 pillow
+easyocr
+requests
 python-multipart
-google-generativeai
 python-dotenv
+google-generativeai
