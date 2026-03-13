@@ -380,10 +380,8 @@ import numpy as np
 
 app = FastAPI()
 
-# OCR
 reader = easyocr.Reader(['en'], gpu=False)
 
-# Models
 car_model = YOLO("yolov8n.pt")
 plate_model = YOLO("license_plate_detector.pt")
 world_model = YOLOWorld("yolov8s-worldv2.pt")
@@ -392,42 +390,34 @@ SAVE_DIR = "detected_frames"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
-# -----------------------
-# TEXT CLEAN
-# -----------------------
-def clean_text(text):
-    return text.upper().replace(" ", "").replace("-", "").replace(".", "")
+def clean_plate_text(text: str) -> str:
+    return text.upper().replace(" ", "").replace("-", "").replace(".", "").strip()
 
 
-# -----------------------
-# PLATE SEARCH CHECK
-# -----------------------
-def is_plate_search(text):
+def is_plate_search(text: str) -> bool:
+    text = clean_plate_text(text)
 
     full_plate = r'^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$'
     state_code = r'^[A-Z]{2}$'
     rto_code = r'^[A-Z]{2}[0-9]{1,2}$'
 
-    return (
+    return bool(
         re.match(full_plate, text)
         or re.match(state_code, text)
         or re.match(rto_code, text)
     )
 
 
-# -----------------------
-# OCR FUNCTION
-# -----------------------
 def perform_ocr(frame, box):
-
     x1, y1, x2, y2 = map(int, box)
 
-    crop = frame[y1:y2, x1:x2]
+    crop = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
 
     if crop.size == 0:
         return ""
 
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
     results = reader.readtext(
         gray,
@@ -435,124 +425,136 @@ def perform_ocr(frame, box):
         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     )
 
-    if len(results) == 0:
+    if not results:
         return ""
 
-    return clean_text(results[0])
+    return clean_plate_text(results[0])
 
 
-def similar(a, b):
+def similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-# -----------------------
-# COLOR DETECTION
-# -----------------------
-def detect_color(crop):
+def parse_prompt(prompt: str):
+    prompt = prompt.lower().strip()
 
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-
-    avg = hsv[:, :, 0].mean()
-
-    if avg < 10 or avg > 170:
-        return "red"
-    elif avg < 25:
-        return "orange"
-    elif avg < 35:
-        return "yellow"
-    elif avg < 85:
-        return "green"
-    elif avg < 130:
-        return "blue"
-    else:
-        return "black"
-
-
-# -----------------------
-# PROMPT PARSE
-# -----------------------
-def parse_prompt(prompt):
-
-    prompt = prompt.lower()
-
-    colors = ["red","blue","green","black","white","yellow","orange"]
+    colors = ["red", "blue", "green", "black", "white", "yellow", "orange", "silver", "grey", "gray", "brown"]
+    words = prompt.split()
 
     color_query = None
-    object_query = prompt
+    object_words = []
 
-    for c in colors:
-        if c in prompt:
-            color_query = c
-            object_query = prompt.replace(c,"").strip()
+    for w in words:
+        if w in colors and color_query is None:
+            color_query = w
+        else:
+            object_words.append(w)
 
-    if object_query == "":
-        object_query = "car"
+    object_query = " ".join(object_words).strip()
+
+    if not object_query:
+        object_query = "car" if color_query else prompt
 
     return object_query, color_query
 
 
-# -----------------------
-# API
-# -----------------------
+def detect_color(crop):
+    if crop.size == 0:
+        return "unknown"
+
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+
+    h = hsv[:, :, 0].mean()
+    s = hsv[:, :, 1].mean()
+    v = hsv[:, :, 2].mean()
+
+    if v < 50:
+        return "black"
+    if s < 40 and v > 160:
+        return "white"
+    if s < 40 and 60 <= v <= 160:
+        return "grey"
+
+    if h < 10 or h >= 170:
+        return "red"
+    elif h < 22:
+        return "orange"
+    elif h < 35:
+        return "yellow"
+    elif h < 85:
+        return "green"
+    elif h < 130:
+        return "blue"
+    else:
+        return "red"
+
+
 @app.post("/process")
 async def process_video(req: Request):
-
     data = await req.json()
 
     video_url = data.get("fileUrl")
-    user_prompt = data.get("prompt","car")
+    raw_prompt = (data.get("prompt") or "car").strip()
+    plate_prompt = clean_plate_text(raw_prompt)
 
-    print("Processing:", user_prompt)
+    print("Processing prompt:", raw_prompt)
 
     video_path = "temp_video.mp4"
 
-    r = requests.get(video_url, stream=True)
+    r = requests.get(video_url, stream=True, timeout=120)
+    r.raise_for_status()
 
     with open(video_path, "wb") as f:
         for chunk in r.iter_content(8192):
-            f.write(chunk)
+            if chunk:
+                f.write(chunk)
 
     cap = cv2.VideoCapture(video_path)
 
     results_list = []
     frame_id = 0
     saved_plates = set()
+    saved_objects = set()
 
-    object_query, color_query = parse_prompt(user_prompt)
+    object_query, color_query = parse_prompt(raw_prompt)
 
-    # dynamic object
-    world_model.set_classes([object_query])
+    if not is_plate_search(raw_prompt):
+        world_model.set_classes([object_query])
 
     while cap.isOpened():
-
         ret, frame = cap.read()
-
         if not ret:
             break
 
         frame_id += 1
 
-        # frame skip for speed
-        if frame_id % 5 != 0:
+        # speed vs accuracy balance
+        if frame_id % 4 != 0:
             continue
 
         # ------------------------
         # NUMBER PLATE SEARCH
         # ------------------------
-        if is_plate_search(clean_text(user_prompt)):
+        if is_plate_search(raw_prompt):
 
-            car_results = car_model(frame, classes=[2], conf=0.4)
+            car_results = car_model(frame, classes=[2], conf=0.35, verbose=False)
+
+            if not car_results or car_results[0].boxes is None:
+                continue
 
             for car in car_results[0].boxes.xyxy:
-
                 x1, y1, x2, y2 = map(int, car)
 
                 car_crop = frame[y1:y2, x1:x2]
+                if car_crop.size == 0:
+                    continue
 
-                plate_results = plate_model(car_crop, conf=0.25)
+                plate_results = plate_model(car_crop, conf=0.20, verbose=False)
+
+                if not plate_results or plate_results[0].boxes is None:
+                    continue
 
                 for plate in plate_results[0].boxes.xyxy:
-
                     px1, py1, px2, py2 = map(int, plate)
 
                     px1 += x1
@@ -560,7 +562,7 @@ async def process_video(req: Request):
                     py1 += y1
                     py2 += y1
 
-                    ocr_text = perform_ocr(frame,[px1,py1,px2,py2])
+                    ocr_text = perform_ocr(frame, [px1, py1, px2, py2])
 
                     if not ocr_text:
                         continue
@@ -568,100 +570,89 @@ async def process_video(req: Request):
                     if ocr_text in saved_plates:
                         continue
 
-                    if user_prompt in ocr_text or similar(user_prompt,ocr_text)>0.75:
-
+                    if plate_prompt in ocr_text or similar(plate_prompt, ocr_text) > 0.75:
                         saved_plates.add(ocr_text)
 
-                        img_path = os.path.join(
-                            SAVE_DIR,
-                            f"plate_{frame_id}.jpg"
-                        )
+                        img_path = os.path.join(SAVE_DIR, f"plate_{frame_id}.jpg")
 
                         annotated = frame.copy()
-
-                        cv2.rectangle(
+                        cv2.rectangle(annotated, (px1, py1), (px2, py2), (0, 255, 0), 2)
+                        cv2.putText(
                             annotated,
-                            (px1,py1),
-                            (px2,py2),
-                            (0,255,0),
+                            ocr_text,
+                            (px1, max(20, py1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 255, 0),
                             2
                         )
-
-                        cv2.imwrite(img_path,annotated)
+                        cv2.imwrite(img_path, annotated)
 
                         results_list.append({
-                            "object":"license_plate",
-                            "ocr_text":ocr_text,
-                            "image_path":img_path,
-                            "bbox":[px1,py1,px2,py2],
-                            "timestamp":frame_id
+                            "object": "license_plate",
+                            "ocr_text": ocr_text,
+                            "image_path": img_path,
+                            "bbox": [px1, py1, px2, py2],
+                            "timestamp": str(frame_id)
                         })
 
         # ------------------------
-        # OBJECT DETECTION
+        # DYNAMIC OBJECT SEARCH
         # ------------------------
         else:
+            results = world_model(frame, conf=0.25, imgsz=640, verbose=False)
 
-            results = world_model(frame, conf=0.35)
-
-            if not results[0].boxes:
+            if not results or results[0].boxes is None or len(results[0].boxes) == 0:
                 continue
 
             boxes = results[0].boxes.xyxy.cpu().numpy()
+            confs = results[0].boxes.conf.cpu().numpy()
 
-            for box in boxes:
+            for box, conf in zip(boxes, confs):
+                x1, y1, x2, y2 = map(int, box)
 
-                x1,y1,x2,y2 = map(int,box)
-
-                crop = frame[y1:y2,x1:x2]
-
-                # color filter
-                if color_query:
-
-                    detected_color = detect_color(crop)
-
-                    if detected_color != color_query:
-                        continue
+                crop = frame[y1:y2, x1:x2]
+                if crop.size == 0:
+                    continue
 
                 label = object_query
 
                 if color_query:
+                    detected_color = detect_color(crop)
+                    if detected_color != color_query:
+                        continue
                     label = f"{color_query} {object_query}"
 
-                img_path = os.path.join(
-                    SAVE_DIR,
-                    f"{label}_{frame_id}.jpg"
-                )
+                # avoid near-duplicate saves
+                dedupe_key = f"{label}_{x1//20}_{y1//20}_{x2//20}_{y2//20}"
+                if dedupe_key in saved_objects:
+                    continue
+                saved_objects.add(dedupe_key)
+
+                img_path = os.path.join(SAVE_DIR, f"{label.replace(' ', '_')}_{frame_id}.jpg")
 
                 annotated = frame.copy()
-
-                cv2.rectangle(
-                    annotated,
-                    (x1,y1),
-                    (x2,y2),
-                    (0,255,0),
-                    2
-                )
-
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(
                     annotated,
-                    label,
-                    (x1,y1-10),
+                    f"{label} {conf:.2f}",
+                    (x1, max(20, y1 - 10)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.8,
-                    (0,255,0),
+                    (0, 255, 0),
                     2
                 )
-
-                cv2.imwrite(img_path,annotated)
+                cv2.imwrite(img_path, annotated)
 
                 results_list.append({
-                    "object":label,
-                    "image_path":img_path,
-                    "bbox":[x1,y1,x2,y2],
-                    "timestamp":frame_id
+                    "object": label,
+                    "ocr_text": "",
+                    "image_path": img_path,
+                    "bbox": [x1, y1, x2, y2],
+                    "timestamp": str(frame_id),
+                    "confidence": float(conf)
                 })
 
     cap.release()
 
-    return {"results":results_list}
+    return {"results": results_list}
