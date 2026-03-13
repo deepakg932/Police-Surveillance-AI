@@ -2,69 +2,7 @@ const axios = require("axios");
 const Detection = require("../models/Detection.js");
 const path = require("path");
 
-exports.searchDetections = async (req, res) => {
-  try {
-    const { object, textNote, trackingId, fileName } = req.query;
-    let filter = {};
 
-    // 1. Filter Setup (Regex for dynamic search)
-    if (object) filter.object = { $regex: object, $options: "i" };
-    if (textNote) filter.textNote = { $regex: textNote, $options: "i" };
-    if (trackingId) filter.trackingId = trackingId;
-    if (fileName) filter.fileName = fileName;
-
-    // 2. Database se results nikaalo
-    const results = await Detection.find(filter).sort({ createdAt: -1 });
-
-    if (results.length === 0) {
-      return res.json({
-        message: "No results found",
-        counts: {},
-        totalUniqueObjects: 0,
-        results: [],
-      });
-    }
-
-    const finalCounts = {};
-
-    const searchTerms = (object || results[0].textNote || "")
-      .toLowerCase()
-      .split(/[\s,]+/)
-      .filter(
-        (w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w),
-      );
-
-    searchTerms.forEach((key) => {
-      const uniqueSetForTerm = new Set();
-      results.forEach((d) => {
-        if (d.object.toLowerCase().includes(key)) {
-          uniqueSetForTerm.add(d.trackingId);
-        }
-      });
-      finalCounts[`total_${key}`] = uniqueSetForTerm.size;
-    });
-
-    return res.json({
-      message: "Success",
-      mode: "Search Result",
-      counts: finalCounts,
-      totalUniqueObjects: new Set(results.map((d) => d.trackingId)).size,
-      results: results.map((d) => ({
-        object: d.object,
-        confidence: d.confidence,
-        trackingId: d.trackingId,
-        timestamp: d.timestamp,
-        image_path: d.imagePath, // DB field name match karo
-        bbox: d.bbox,
-        processing_time: d.processingTime,
-        screenshotUrl: d.screenshotUrl, // DB se direct URL
-      })),
-    });
-  } catch (err) {
-    console.error("❌ Search Error:", err.message);
-    return res.status(500).json({ error: err.message });
-  }
-};
 
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
@@ -297,5 +235,154 @@ exports.uploadAndProcess = async (req, res) => {
       error: err.message,
     });
 
+  }
+};
+
+
+// exports.searchDetections = async (req, res) => {
+//   try {
+//     const { object, textNote, trackingId, fileName } = req.query;
+//     let filter = {};
+
+//     // 1. Filter Setup (Regex for dynamic search)
+//     if (object) filter.object = { $regex: object, $options: "i" };
+//     if (textNote) filter.textNote = { $regex: textNote, $options: "i" };
+//     if (trackingId) filter.trackingId = trackingId;
+//     if (fileName) filter.fileName = fileName;
+
+//     // 2. Database se results nikaalo
+//     const results = await Detection.find(filter).sort({ createdAt: -1 });
+
+//     if (results.length === 0) {
+//       return res.json({
+//         message: "No results found",
+//         counts: {},
+//         totalUniqueObjects: 0,
+//         results: [],
+//       });
+//     }
+
+//     const finalCounts = {};
+
+//     const searchTerms = (object || results[0].textNote || "")
+//       .toLowerCase()
+//       .split(/[\s,]+/)
+//       .filter(
+//         (w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w),
+//       );
+
+//     searchTerms.forEach((key) => {
+//       const uniqueSetForTerm = new Set();
+//       results.forEach((d) => {
+//         if (d.object.toLowerCase().includes(key)) {
+//           uniqueSetForTerm.add(d.trackingId);
+//         }
+//       });
+//       finalCounts[`total_${key}`] = uniqueSetForTerm.size;
+//     });
+
+//     return res.json({
+//       message: "Success",
+//       mode: "Search Result",
+//       counts: finalCounts,
+//       totalUniqueObjects: new Set(results.map((d) => d.trackingId)).size,
+//       results: results.map((d) => ({
+//         object: d.object,
+//         confidence: d.confidence,
+//         trackingId: d.trackingId,
+//         timestamp: d.timestamp,
+//         image_path: d.imagePath, // DB field name match karo
+//         bbox: d.bbox,
+//         processing_time: d.processingTime,
+//         screenshotUrl: d.screenshotUrl, // DB se direct URL
+//       })),
+//     });
+//   } catch (err) {
+//     console.error("❌ Search Error:", err.message);
+//     return res.status(500).json({ error: err.message });
+//   }
+// };
+
+
+
+
+
+
+exports.searchDetections = async (req, res) => {
+  try {
+    const { object, textNote, trackingId, fileName } = req.query;
+
+    let match = {};
+
+    if (object) match.object = { $regex: object, $options: "i" };
+    if (textNote) match.textNote = { $regex: textNote, $options: "i" };
+    if (trackingId) match.trackingId = trackingId;
+    if (fileName) match.fileName = fileName;
+
+    const results = await Detection.aggregate([
+      { $match: match },
+
+      // latest detection first
+      { $sort: { createdAt: -1 } },
+
+      // unique trackingId
+      {
+        $group: {
+          _id: "$trackingId",
+          doc: { $first: "$$ROOT" }
+        }
+      },
+
+      { $replaceRoot: { newRoot: "$doc" } }
+    ]);
+
+    if (results.length === 0) {
+      return res.json({
+        message: "No results found",
+        counts: {},
+        totalUniqueObjects: 0,
+        results: [],
+      });
+    }
+
+    const finalCounts = {};
+
+    const searchTerms = (object || results[0].textNote || "")
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter(w => !["with","and","wearing","in","a","wear"].includes(w));
+
+    searchTerms.forEach((key) => {
+      const uniqueSet = new Set();
+
+      results.forEach((d) => {
+        if (d.object.toLowerCase().includes(key)) {
+          uniqueSet.add(d.trackingId);
+        }
+      });
+
+      finalCounts[`total_${key}`] = uniqueSet.size;
+    });
+
+    return res.json({
+      message: "Success",
+      mode: "Search Result",
+      counts: finalCounts,
+      totalUniqueObjects: results.length,
+      results: results.map((d) => ({
+        object: d.object,
+        confidence: d.confidence,
+        trackingId: d.trackingId,
+        timestamp: d.timestamp,
+        image_path: d.imagePath,
+        bbox: d.bbox,
+        processing_time: d.processingTime,
+        screenshotUrl: d.screenshotUrl
+      }))
+    });
+
+  } catch (err) {
+    console.error("❌ Search Error:", err.message);
+    return res.status(500).json({ error: err.message });
   }
 };

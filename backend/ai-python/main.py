@@ -398,10 +398,26 @@ def clean_text(text):
     return text.upper().replace(" ", "").replace("-", "").replace(".", "")
 
 
-def is_plate_number(text):
-    pattern = r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}'
-    return re.match(pattern, text)
+# def is_plate_number(text):
+#     pattern = r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}'
+#     return re.match(pattern, text)
 
+def is_plate_search(text):
+
+    # Full plate
+    full_plate = r'^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$'
+
+    # State code
+    state_code = r'^[A-Z]{2}$'
+
+    # RTO code
+    rto_code = r'^[A-Z]{2}[0-9]{1,2}$'
+
+    return (
+        re.match(full_plate, text) or
+        re.match(state_code, text) or
+        re.match(rto_code, text)
+    )
 
 def perform_ocr(frame, box):
 
@@ -460,9 +476,9 @@ async def process_video(req: Request):
     frame_id=0
 
     # 🔴 CASE 1 : NUMBER PLATE SEARCH
-    if is_plate_number(user_prompt):
+    if is_plate_search(user_prompt):
 
-        print("🚗 Plate Detection Mode")
+        print("Plate Detection Mode")
 
         while cap.isOpened():
 
@@ -497,8 +513,13 @@ async def process_video(req: Request):
                     ocr_text = perform_ocr(frame,[px1,py1,px2,py2])
 
                     print("Plate OCR:",ocr_text)
+                    saved_plates = set()
 
-                    if similar(user_prompt,ocr_text)>0.75:
+                    if user_prompt in ocr_text or similar(user_prompt, ocr_text) > 0.75:
+                        if ocr_text in saved_plates:
+                            continue
+                        saved_plates.add(ocr_text)
+                        
 
                         img_path=os.path.join(SAVE_DIR,f"plate_{frame_id}.jpg")
 
