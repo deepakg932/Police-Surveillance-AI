@@ -180,25 +180,49 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # from fastapi import FastAPI, Request
-# from ultralytics import YOLO
+# from ultralytics import YOLO, YOLOWorld
 # import cv2
 # import os
-# import torch
-# import numpy as np
 # import requests
 # import easyocr
+# import re
+# from difflib import SequenceMatcher
+# import threading
 
 # app = FastAPI()
 
 # # OCR
-# reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+# reader = easyocr.Reader(['en'], gpu=False)
 
 # # Models
-# car_model = YOLO("yolov8n.pt")  
-
-# plate_model = YOLO("license_plate_detector.pt")  # plate model
-
+# car_model = YOLO("yolov8n.pt")
+# plate_model = YOLO("license_plate_detector.pt")
+# world_model = YOLOWorld("yolov8s-worldv2.pt")
 
 # SAVE_DIR = "detected_frames"
 # os.makedirs(SAVE_DIR, exist_ok=True)
@@ -206,6 +230,19 @@
 
 # def clean_text(text):
 #     return text.upper().replace(" ", "").replace("-", "").replace(".", "")
+
+
+# def is_plate_search(text):
+
+#     full_plate = r'^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$'
+#     state_code = r'^[A-Z]{2}$'
+#     rto_code = r'^[A-Z]{2}[0-9]{1,2}$'
+
+#     return (
+#         re.match(full_plate, text) or
+#         re.match(state_code, text) or
+#         re.match(rto_code, text)
+#     )
 
 
 # def perform_ocr(frame, box):
@@ -218,49 +255,42 @@
 #         return ""
 
 #     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-#     blur = cv2.GaussianBlur(gray, (3,3), 0)
-#     thresh = cv2.adaptiveThreshold(
-#         blur,255,
-#         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-#         cv2.THRESH_BINARY,11,2
-#     )
 
 #     results = reader.readtext(
-#     thresh,
-#     detail=0,
-#     allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-# )
+#         gray,
+#         detail=0,
+#         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+#     )
 
-#     if len(results)==0:
+#     if len(results) == 0:
 #         return ""
 
-#     text = clean_text(results[0])
-
-#     return text
+#     return clean_text(results[0])
 
 
-# @app.post("/process")
-# async def process_video(req: Request):
+# def similar(a, b):
+#     return SequenceMatcher(None, a, b).ratio()
 
-#     data = await req.json()
 
-#     video_url = data.get("fileUrl")
-#     user_prompt = clean_text(data.get("prompt"))
+# # 🚀 MAIN VIDEO PROCESS FUNCTION
+# def run_detection(video_url, user_prompt):
 
-#     print("Searching:", user_prompt)
+#     print("Downloading video...")
 
 #     video_path = "temp_video.mp4"
 
 #     r = requests.get(video_url, stream=True)
 
 #     with open(video_path, "wb") as f:
-#         for chunk in r.iter_content(1024):
+#         for chunk in r.iter_content(8192):
 #             f.write(chunk)
+
+#     print("Video downloaded")
 
 #     cap = cv2.VideoCapture(video_path)
 
 #     frame_id = 0
-#     results_list = []
+#     saved_plates = set()
 
 #     while cap.isOpened():
 
@@ -271,101 +301,262 @@
 
 #         frame_id += 1
 
-#         if frame_id % 2!= 0:
+#         # frame skip for speed
+#         if frame_id % 5 != 0:
 #             continue
 
-#         car_results = car_model(frame, classes=[2], conf=0.4)
+#         # --------------------------
+#         # NUMBER PLATE SEARCH
+#         # --------------------------
+#         if is_plate_search(user_prompt):
 
-#         for car in car_results[0].boxes.xyxy:
+#             car_results = car_model(frame, classes=[2], conf=0.4)
 
-#             x1,y1,x2,y2 = map(int,car)
+#             for car in car_results[0].boxes.xyxy:
 
-#             car_crop = frame[y1:y2,x1:x2]
+#                 x1, y1, x2, y2 = map(int, car)
 
-#             plate_results = plate_model(car_crop, conf=0.25, imgsz=640)
-#             print("Plates detected:", len(plate_results[0].boxes))
+#                 car_crop = frame[y1:y2, x1:x2]
 
-#             for plate in plate_results[0].boxes.xyxy:
+#                 plate_results = plate_model(car_crop, conf=0.25)
 
-#                 px1,py1,px2,py2 = map(int,plate)
+#                 for plate in plate_results[0].boxes.xyxy:
 
-#                 px1+=x1
-#                 px2+=x1
-#                 py1+=y1
-#                 py2+=y1
+#                     px1, py1, px2, py2 = map(int, plate)
 
-#                 ocr_text = perform_ocr(frame,[px1,py1,px2,py2])
+#                     px1 += x1
+#                     px2 += x1
+#                     py1 += y1
+#                     py2 += y1
 
-#                 print("Detected:",ocr_text)
+#                     ocr_text = perform_ocr(frame, [px1, py1, px2, py2])
 
-#                 from difflib import SequenceMatcher
-#                 def similar(a,b):
-#                     return SequenceMatcher(None,a,b).ratio()
-#                 if similar(user_prompt, ocr_text) > 0.75:
+#                     print("Plate OCR:", ocr_text)
 
-#                     img_path = os.path.join(SAVE_DIR,f"match_{frame_id}.jpg")
+#                     if not ocr_text:
+#                         continue
 
-#                     annotated = frame.copy()
+#                     if ocr_text in saved_plates:
+#                         continue
 
-#                     cv2.rectangle(annotated,(px1,py1),(px2,py2),(0,255,0),2)
-#                     cv2.putText(
-#                         annotated,
-#                         ocr_text,
-#                         (px1,py1-10),
-#                         cv2.FONT_HERSHEY_SIMPLEX,
-#                         0.9,
-#                         (0,255,0),
-#                         2
-#                     )
+#                     if user_prompt in ocr_text or similar(user_prompt, ocr_text) > 0.75:
 
-#                     cv2.imwrite(img_path,annotated)
+#                         saved_plates.add(ocr_text)
 
-#                     results_list.append({
-#                         "object":"license_plate",
-#                         "ocr_text":ocr_text,
-#                         "image_path":img_path,
-#                         "bbox":[px1,py1,px2,py2],
-#                         "timestamp":frame_id
-#                     })
+#                         img_path = os.path.join(
+#                             SAVE_DIR,
+#                             f"plate_{frame_id}.jpg"
+#                         )
+
+#                         annotated = frame.copy()
+
+#                         cv2.rectangle(
+#                             annotated,
+#                             (px1, py1),
+#                             (px2, py2),
+#                             (0, 255, 0),
+#                             2
+#                         )
+
+#                         cv2.putText(
+#                             annotated,
+#                             ocr_text,
+#                             (px1, py1 - 10),
+#                             cv2.FONT_HERSHEY_SIMPLEX,
+#                             0.8,
+#                             (0, 255, 0),
+#                             2
+#                         )
+
+#                         cv2.imwrite(img_path, annotated)
+
+#         # --------------------------
+#         # NORMAL OBJECT SEARCH
+#         # --------------------------
+#         else:
+
+#             world_model.set_classes([user_prompt])
+
+#             results = world_model(frame, conf=0.35)
+
+#             if not results[0].boxes:
+#                 continue
+
+#             boxes = results[0].boxes.xyxy.cpu().numpy()
+
+#             for box in boxes:
+
+#                 x1, y1, x2, y2 = map(int, box)
+
+#                 img_path = os.path.join(
+#                     SAVE_DIR,
+#                     f"{user_prompt}_{frame_id}.jpg"
+#                 )
+
+#                 annotated = frame.copy()
+
+#                 cv2.rectangle(
+#                     annotated,
+#                     (x1, y1),
+#                     (x2, y2),
+#                     (0, 255, 0),
+#                     2
+#                 )
+
+#                 cv2.putText(
+#                     annotated,
+#                     user_prompt,
+#                     (x1, y1 - 10),
+#                     cv2.FONT_HERSHEY_SIMPLEX,
+#                     0.8,
+#                     (0, 255, 0),
+#                     2
+#                 )
+
+#                 cv2.imwrite(img_path, annotated)
 
 #     cap.release()
 
-#     return {"results":results_list}
+#     print("Video processing finished")
 
 
+# # 🚀 FASTAPI ENDPOINT
+# @app.post("/process")
+# async def process_video(req: Request):
 
+#     data = await req.json()
 
+#     video_url = data.get("fileUrl")
+#     user_prompt = clean_text(data.get("prompt"))
 
+#     print("Processing:", user_prompt)
 
+#     video_path = "temp_video.mp4"
 
+#     r = requests.get(video_url, stream=True)
 
+#     with open(video_path, "wb") as f:
+#         for chunk in r.iter_content(8192):
+#             f.write(chunk)
 
+#     cap = cv2.VideoCapture(video_path)
 
+#     results_list = []
+#     frame_id = 0
+#     saved_plates = set()
 
+#     while cap.isOpened():
 
+#         ret, frame = cap.read()
+#         if not ret:
+#             break
 
+#         frame_id += 1
 
+#         # faster but still full scan
+#         if frame_id % 5 != 0:
+#             continue
 
+#         if is_plate_search(user_prompt):
 
+#             car_results = car_model(frame, classes=[2], conf=0.4)
 
+#             for car in car_results[0].boxes.xyxy:
 
+#                 x1, y1, x2, y2 = map(int, car)
 
+#                 car_crop = frame[y1:y2, x1:x2]
 
+#                 plate_results = plate_model(car_crop, conf=0.25)
 
+#                 for plate in plate_results[0].boxes.xyxy:
 
+#                     px1, py1, px2, py2 = map(int, plate)
 
+#                     px1 += x1
+#                     px2 += x1
+#                     py1 += y1
+#                     py2 += y1
 
+#                     ocr_text = perform_ocr(frame, [px1, py1, px2, py2])
 
+#                     if not ocr_text:
+#                         continue
 
+#                     if ocr_text in saved_plates:
+#                         continue
 
+#                     if user_prompt in ocr_text or similar(user_prompt, ocr_text) > 0.75:
 
+#                         saved_plates.add(ocr_text)
 
+#                         img_path = os.path.join(
+#                             SAVE_DIR,
+#                             f"plate_{frame_id}.jpg"
+#                         )
 
+#                         annotated = frame.copy()
 
+#                         cv2.rectangle(
+#                             annotated,
+#                             (px1, py1),
+#                             (px2, py2),
+#                             (0, 255, 0),
+#                             2
+#                         )
 
+#                         cv2.imwrite(img_path, annotated)
 
+#                         results_list.append({
+#                             "object": "license_plate",
+#                             "ocr_text": ocr_text,
+#                             "image_path": img_path,
+#                             "bbox": [px1, py1, px2, py2],
+#                             "timestamp": frame_id
+#                         })
 
+#         else:
 
+#             world_model.set_classes([user_prompt])
+
+#             results = world_model(frame, conf=0.35)
+
+#             if not results[0].boxes:
+#                 continue
+
+#             boxes = results[0].boxes.xyxy.cpu().numpy()
+
+#             for box in boxes:
+
+#                 x1, y1, x2, y2 = map(int, box)
+
+#                 img_path = os.path.join(
+#                     SAVE_DIR,
+#                     f"{user_prompt}_{frame_id}.jpg"
+#                 )
+
+#                 annotated = frame.copy()
+
+#                 cv2.rectangle(
+#                     annotated,
+#                     (x1, y1),
+#                     (x2, y2),
+#                     (0, 255, 0),
+#                     2
+#                 )
+
+#                 cv2.imwrite(img_path, annotated)
+
+#                 results_list.append({
+#                     "object": user_prompt,
+#                     "image_path": img_path,
+#                     "bbox": [x1, y1, x2, y2],
+#                     "timestamp": frame_id
+#                 })
+
+#     cap.release()
+
+#     return {"results": results_list}
 
 
 from fastapi import FastAPI, Request
@@ -376,16 +567,15 @@ import requests
 import easyocr
 import re
 from difflib import SequenceMatcher
-import threading
 
 app = FastAPI()
 
-# OCR
 reader = easyocr.Reader(['en'], gpu=False)
 
-# Models
+# MODELS
 car_model = YOLO("yolov8n.pt")
 plate_model = YOLO("license_plate_detector.pt")
+
 world_model = YOLOWorld("yolov8s-worldv2.pt")
 
 SAVE_DIR = "detected_frames"
@@ -403,9 +593,9 @@ def is_plate_search(text):
     rto_code = r'^[A-Z]{2}[0-9]{1,2}$'
 
     return (
-        re.match(full_plate, text) or
-        re.match(state_code, text) or
-        re.match(rto_code, text)
+        re.match(full_plate, text)
+        or re.match(state_code, text)
+        or re.match(rto_code, text)
     )
 
 
@@ -436,10 +626,15 @@ def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
-# 🚀 MAIN VIDEO PROCESS FUNCTION
-def run_detection(video_url, user_prompt):
+@app.post("/process")
+async def process_video(req: Request):
 
-    print("Downloading video...")
+    data = await req.json()
+
+    video_url = data.get("fileUrl")
+    user_prompt = clean_text(data.get("prompt"))
+
+    print("Processing:", user_prompt)
 
     video_path = "temp_video.mp4"
 
@@ -449,12 +644,32 @@ def run_detection(video_url, user_prompt):
         for chunk in r.iter_content(8192):
             f.write(chunk)
 
-    print("Video downloaded")
-
     cap = cv2.VideoCapture(video_path)
 
     frame_id = 0
+    results_list = []
     saved_plates = set()
+
+    # 🔥 MULTI OBJECT CLASSES
+    detection_classes = [
+        "person",
+        "helmet",
+        "bag",
+        "backpack",
+        "handbag",
+        "car",
+        "truck",
+        "bus",
+        "motorcycle",
+        "bicycle",
+        "knife",
+        "gun",
+        "pistol",
+        "rifle",
+        user_prompt
+    ]
+
+    world_model.set_classes(detection_classes)
 
     while cap.isOpened():
 
@@ -469,9 +684,9 @@ def run_detection(video_url, user_prompt):
         if frame_id % 5 != 0:
             continue
 
-        # --------------------------
+        # -------------------------
         # NUMBER PLATE SEARCH
-        # --------------------------
+        # -------------------------
         if is_plate_search(user_prompt):
 
             car_results = car_model(frame, classes=[2], conf=0.4)
@@ -494,8 +709,6 @@ def run_detection(video_url, user_prompt):
                     py2 += y1
 
                     ocr_text = perform_ocr(frame, [px1, py1, px2, py2])
-
-                    print("Plate OCR:", ocr_text)
 
                     if not ocr_text:
                         continue
@@ -534,12 +747,18 @@ def run_detection(video_url, user_prompt):
 
                         cv2.imwrite(img_path, annotated)
 
-        # --------------------------
-        # NORMAL OBJECT SEARCH
-        # --------------------------
-        else:
+                        results_list.append({
+                            "object": "license_plate",
+                            "ocr_text": ocr_text,
+                            "image_path": img_path,
+                            "bbox": [px1, py1, px2, py2],
+                            "timestamp": frame_id
+                        })
 
-            world_model.set_classes([user_prompt])
+        # -------------------------
+        # OBJECT DETECTION
+        # -------------------------
+        else:
 
             results = world_model(frame, conf=0.35)
 
@@ -547,14 +766,17 @@ def run_detection(video_url, user_prompt):
                 continue
 
             boxes = results[0].boxes.xyxy.cpu().numpy()
+            classes = results[0].boxes.cls.cpu().numpy()
 
-            for box in boxes:
+            for box, cls in zip(boxes, classes):
 
                 x1, y1, x2, y2 = map(int, box)
 
+                label = detection_classes[int(cls)]
+
                 img_path = os.path.join(
                     SAVE_DIR,
-                    f"{user_prompt}_{frame_id}.jpg"
+                    f"{label}_{frame_id}.jpg"
                 )
 
                 annotated = frame.copy()
@@ -569,7 +791,7 @@ def run_detection(video_url, user_prompt):
 
                 cv2.putText(
                     annotated,
-                    user_prompt,
+                    label,
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.8,
@@ -579,140 +801,8 @@ def run_detection(video_url, user_prompt):
 
                 cv2.imwrite(img_path, annotated)
 
-    cap.release()
-
-    print("Video processing finished")
-
-
-# 🚀 FASTAPI ENDPOINT
-@app.post("/process")
-async def process_video(req: Request):
-
-    data = await req.json()
-
-    video_url = data.get("fileUrl")
-    user_prompt = clean_text(data.get("prompt"))
-
-    print("Processing:", user_prompt)
-
-    video_path = "temp_video.mp4"
-
-    r = requests.get(video_url, stream=True)
-
-    with open(video_path, "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
-
-    cap = cv2.VideoCapture(video_path)
-
-    results_list = []
-    frame_id = 0
-    saved_plates = set()
-
-    while cap.isOpened():
-
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame_id += 1
-
-        # faster but still full scan
-        if frame_id % 5 != 0:
-            continue
-
-        if is_plate_search(user_prompt):
-
-            car_results = car_model(frame, classes=[2], conf=0.4)
-
-            for car in car_results[0].boxes.xyxy:
-
-                x1, y1, x2, y2 = map(int, car)
-
-                car_crop = frame[y1:y2, x1:x2]
-
-                plate_results = plate_model(car_crop, conf=0.25)
-
-                for plate in plate_results[0].boxes.xyxy:
-
-                    px1, py1, px2, py2 = map(int, plate)
-
-                    px1 += x1
-                    px2 += x1
-                    py1 += y1
-                    py2 += y1
-
-                    ocr_text = perform_ocr(frame, [px1, py1, px2, py2])
-
-                    if not ocr_text:
-                        continue
-
-                    if ocr_text in saved_plates:
-                        continue
-
-                    if user_prompt in ocr_text or similar(user_prompt, ocr_text) > 0.75:
-
-                        saved_plates.add(ocr_text)
-
-                        img_path = os.path.join(
-                            SAVE_DIR,
-                            f"plate_{frame_id}.jpg"
-                        )
-
-                        annotated = frame.copy()
-
-                        cv2.rectangle(
-                            annotated,
-                            (px1, py1),
-                            (px2, py2),
-                            (0, 255, 0),
-                            2
-                        )
-
-                        cv2.imwrite(img_path, annotated)
-
-                        results_list.append({
-                            "object": "license_plate",
-                            "ocr_text": ocr_text,
-                            "image_path": img_path,
-                            "bbox": [px1, py1, px2, py2],
-                            "timestamp": frame_id
-                        })
-
-        else:
-
-            world_model.set_classes([user_prompt])
-
-            results = world_model(frame, conf=0.35)
-
-            if not results[0].boxes:
-                continue
-
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-
-            for box in boxes:
-
-                x1, y1, x2, y2 = map(int, box)
-
-                img_path = os.path.join(
-                    SAVE_DIR,
-                    f"{user_prompt}_{frame_id}.jpg"
-                )
-
-                annotated = frame.copy()
-
-                cv2.rectangle(
-                    annotated,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 255, 0),
-                    2
-                )
-
-                cv2.imwrite(img_path, annotated)
-
                 results_list.append({
-                    "object": user_prompt,
+                    "object": label,
                     "image_path": img_path,
                     "bbox": [x1, y1, x2, y2],
                     "timestamp": frame_id
