@@ -129,7 +129,7 @@ exports.uploadAndProcess = async (req, res) => {
         prompt: userPrompt,
       },
       {
-        timeout: 600000,
+        timeout: 1800000,
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
       },
@@ -299,48 +299,62 @@ exports.searchDetections = async (req, res) => {
     const results = await Detection.aggregate([
       { $match: match },
 
-      // latest detection first
       { $sort: { createdAt: -1 } },
 
-      // unique trackingId
       {
         $group: {
           _id: "$trackingId",
-          doc: { $first: "$$ROOT" },
-        },
+          doc: { $first: "$$ROOT" }
+        }
       },
 
-      { $replaceRoot: { newRoot: "$doc" } },
+      { $replaceRoot: { newRoot: "$doc" } }
     ]);
 
-    if (results.length === 0) {
+    if (!results.length) {
       return res.json({
         message: "No results found",
         counts: {},
         totalUniqueObjects: 0,
-        results: [],
+        results: []
       });
     }
 
-    const finalCounts = {};
-
-    const searchTerms = (object || results[0].textNote || "")
+    // 🔎 search keyword detection
+    const searchTerms = (
+      object ||
+      textNote ||
+      ""
+    )
       .toLowerCase()
       .split(/[\s,]+/)
-      .filter(
-        (w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w),
-      );
+      .filter(w => w && !["with","and","wearing","in","a","wear"].includes(w));
+
+    const finalCounts = {};
 
     searchTerms.forEach((key) => {
+
       const uniqueSet = new Set();
 
       results.forEach((d) => {
-        if (d.object.toLowerCase().includes(key)) {
+
+        const objMatch =
+          d.object &&
+          d.object.toLowerCase().includes(key);
+
+        const ocrMatch =
+          d.ocrText &&
+          d.ocrText.toLowerCase().includes(key);
+
+        if (objMatch || ocrMatch) {
           uniqueSet.add(d.trackingId);
         }
+
       });
 
-      finalCounts[`total_${key}`] = uniqueSet.size;
+      finalCounts[`total_${key.replace(/[^a-zA-Z0-9]/g,"")}`] =
+        uniqueSet.size;
+
     });
 
     return res.json({
@@ -350,17 +364,24 @@ exports.searchDetections = async (req, res) => {
       totalUniqueObjects: results.length,
       results: results.map((d) => ({
         object: d.object,
+        ocrText: d.ocrText,
         confidence: d.confidence,
         trackingId: d.trackingId,
         timestamp: d.timestamp,
         image_path: d.imagePath,
         bbox: d.bbox,
         processing_time: d.processingTime,
-        screenshotUrl: d.screenshotUrl,
-      })),
+        screenshotUrl: d.screenshotUrl
+      }))
     });
+
   } catch (err) {
+
     console.error("❌ Search Error:", err.message);
-    return res.status(500).json({ error: err.message });
+
+    return res.status(500).json({
+      error: err.message
+    });
+
   }
 };
