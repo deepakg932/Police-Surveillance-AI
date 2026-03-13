@@ -168,101 +168,134 @@ exports.searchDetections = async (req, res) => {
 
 exports.uploadAndProcess = async (req, res) => {
   try {
+
     const videoFile = req.files?.file?.[0];
-    const imageFile = req.files?.image?.[0]; 
+    const imageFile = req.files?.image?.[0];
     const userPrompt = req.body.text || "license plate";
 
-    if (!videoFile) return res.status(400).json({ message: "Video file missing" });
-    
-    const startTime = Date.now();
-    const videoUrl = `${process.env.BASE_URL}/uploads/${videoFile.filename}`;
-    const imageUrl = imageFile ? `${process.env.BASE_URL}/uploads/${imageFile.filename}` : null;
+    if (!videoFile) {
+      return res.status(400).json({ message: "Video file missing" });
+    }
 
-    // 1. Python API Call
-    const response = await axios.post(`${process.env.PYTHON_API_URL}/process`, {
+    const startTime = Date.now();
+
+    const BASE_URL = process.env.BASE_URL;
+
+    const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
+    const imageUrl = imageFile
+      ? `${BASE_URL}/uploads/${imageFile.filename}`
+      : null;
+
+    // 🧠 Python API call
+    const response = await axios.post(
+      `${process.env.PYTHON_API_URL}/process`,
+      {
         fileUrl: videoUrl,
         imageUrl: imageUrl,
         prompt: userPrompt,
       },
-      { timeout: 0, maxContentLength: Infinity, maxBodyLength: Infinity }
+      {
+        timeout: 0,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
     );
 
     const endTime = Date.now();
     const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
 
-   const detections = (response.data.results || []).map(d => {
+    // ✅ Normalize python response
+    const detections = (response.data.results || [])
+      .map((d, index) => {
 
-  const cleanPath = (d.image_path || "").replace(/\\/g, "/")
+        const cleanPath = (d.image_path || "").replace(/\\/g, "/");
 
-  return {
-    object: d.object || "unknown",
-    ocrText: d.ocr_text || "",
-    confidence: typeof d.confidence === "number" ? d.confidence : 0.85,
-    trackingId: (d.trackingId || Date.now()).toString(),
-    timestamp: d.timestamp || "0",
-    bbox: d.bbox || [],
-    imagePath: cleanPath
-  }
+        return {
+          object: d.object || "unknown",
+          ocrText: d.ocr_text || "",
+          confidence: typeof d.confidence === "number" ? d.confidence : 0.85,
+          trackingId: (d.trackingId || Date.now() + index).toString(),
+          timestamp: d.timestamp || "0",
+          bbox: d.bbox || [],
+          imagePath: cleanPath,
+        };
 
-}).filter(d => d.confidence >= 0.30)
+      })
+      .filter((d) => d.confidence >= 0.30);
 
-    const BASE_URL = process.env.BASE_URL;
+    // 🎯 Dynamic Counting
     const finalCounts = {};
 
-    // 3. Dynamic Keywords Counting (Object Name + OCR Text)
-    const keywords = userPrompt.toLowerCase().split(/[\s,]+/)
-      .filter(w => w.length > 2 && !["with", "and", "the"].includes(w));
+    const keywords = userPrompt
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .filter((w) => w.length > 2 && !["with", "and", "the"].includes(w));
 
     keywords.forEach((key) => {
+
       const uniqueSet = new Set();
+
       detections.forEach((d) => {
+
         const inObject = d.object.toLowerCase().includes(key);
         const inOCR = d.ocrText && d.ocrText.toLowerCase().includes(key);
-        // const inOCR = d.ocr_text && d.ocr_text.toLowerCase().includes(key);
-        
+
         if (inObject || inOCR) {
           uniqueSet.add(d.trackingId);
         }
+
       });
-      finalCounts[`total_${key.replace(/[^a-zA-Z0-9]/g, '')}`] = uniqueSet.size;
+
+      finalCounts[`total_${key.replace(/[^a-zA-Z0-9]/g, "")}`] = uniqueSet.size;
+
     });
 
-    // 4. Save to Database
+    // 💾 Save to MongoDB
     if (detections.length > 0) {
-      const detectionsToSave = detections.map((d) => ({
+
+      const detectionsToSave = detections.map((d) => {
+
+        return {
           fileName: videoFile.filename,
           textNote: userPrompt,
           object: d.object,
-          ocrText: d.ocr_text,
-          confidence: d.confidence || 0.85,
-          // confidence: d.confidence,
+          ocrText: d.ocrText,
+          confidence: d.confidence,
           timestamp: d.timestamp,
-          trackingId: (d.trackingId || Date.now()).toString(),
-          // trackingId: d.trackingId.toString(),
+          trackingId: d.trackingId,
           bbox: d.bbox,
-          imagePath: d.image_path.replace(/\\/g, "/"),
-          screenshotUrl: `${BASE_URL}/${d.image_path.replace(/\\/g, "/")}`,
+          imagePath: d.imagePath,
+          screenshotUrl: d.imagePath ? `${BASE_URL}/${d.imagePath}` : "",
           processingTime: processingTimeStr,
-          videoUrl: videoUrl
-      }));
+          videoUrl: videoUrl,
+        };
+
+      });
+
       await Detection.insertMany(detectionsToSave);
+
     }
 
-    // 5. Final JSON Response
+    // 🚀 Final Response
     return res.json({
       message: "Success",
       processing_time: processingTimeStr,
       mode: imageFile ? "Image Search" : "Text Search",
       counts: finalCounts,
-      totalUniqueObjects: new Set(detections.map(d => d.trackingId)).size,
+      totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
       results: detections.map((d) => ({
         ...d,
-        screenshotUrl: `${BASE_URL}/${d.image_path.replace(/\\/g, "/")}`,
+        screenshotUrl: d.imagePath ? `${BASE_URL}/${d.imagePath}` : "",
       })),
     });
 
   } catch (err) {
-    console.error("❌ Node Error:", err.message);
-    return res.status(500).json({ error: err.message });
+
+    console.error("❌ Node Error:", err);
+
+    return res.status(500).json({
+      error: err.message,
+    });
+
   }
 };
