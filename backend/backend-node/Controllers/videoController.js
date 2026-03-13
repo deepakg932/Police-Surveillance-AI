@@ -2,22 +2,20 @@ const axios = require("axios");
 const Detection = require("../models/Detection.js");
 const path = require("path");
 
-
-
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
 //     const videoFile = req.files?.file?.[0];
-//     const imageFile = req.files?.image?.[0]; 
+//     const imageFile = req.files?.image?.[0];
 //     const userPrompt = req.body.text || "person, car";
 
 //     if (!videoFile) return res.status(400).json({ message: "Video missing" });
-    
+
 //     const startTime = Date.now();
 
 //     // URLs for Python to download the files
 //     const videoUrl = `${process.env.BASE_URL}/uploads/${videoFile.filename}`;
-//     const imageUrl = imageFile 
-//       ? `${process.env.BASE_URL}/uploads/${imageFile.filename}` 
+//     const imageUrl = imageFile
+//       ? `${process.env.BASE_URL}/uploads/${imageFile.filename}`
 //       : null;
 
 //     // Call Python API
@@ -40,9 +38,8 @@ const path = require("path");
 
 //     // 🎯 UPDATE: Sync threshold with Python (Python uses 0.55, Node filters at 0.55)
 //     // const detections = (response.data.results || []).filter(
-//     //   (d) => d.confidence >= 0.55 
+//     //   (d) => d.confidence >= 0.55
 //     // );
-
 
 //     const detections = (response.data.results || []).filter((d) => d.confidence >= 0.35);
 //     const BASE_URL = process.env.BASE_URL;
@@ -106,7 +103,6 @@ const path = require("path");
 
 exports.uploadAndProcess = async (req, res) => {
   try {
-
     const videoFile = req.files?.file?.[0];
     const imageFile = req.files?.image?.[0];
     const userPrompt = req.body.text || "license plate";
@@ -133,10 +129,10 @@ exports.uploadAndProcess = async (req, res) => {
         prompt: userPrompt,
       },
       {
-        timeout: 0,
+        timeout: 600000,
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
-      }
+      },
     );
 
     const endTime = Date.now();
@@ -145,7 +141,6 @@ exports.uploadAndProcess = async (req, res) => {
     // ✅ Normalize python response
     const detections = (response.data.results || [])
       .map((d, index) => {
-
         const cleanPath = (d.image_path || "").replace(/\\/g, "/");
 
         return {
@@ -157,9 +152,8 @@ exports.uploadAndProcess = async (req, res) => {
           bbox: d.bbox || [],
           imagePath: cleanPath,
         };
-
       })
-      .filter((d) => d.confidence >= 0.30);
+      .filter((d) => d.confidence >= 0.3);
 
     // 🎯 Dynamic Counting
     const finalCounts = {};
@@ -170,29 +164,23 @@ exports.uploadAndProcess = async (req, res) => {
       .filter((w) => w.length > 2 && !["with", "and", "the"].includes(w));
 
     keywords.forEach((key) => {
-
       const uniqueSet = new Set();
 
       detections.forEach((d) => {
-
         const inObject = d.object.toLowerCase().includes(key);
         const inOCR = d.ocrText && d.ocrText.toLowerCase().includes(key);
 
         if (inObject || inOCR) {
           uniqueSet.add(d.trackingId);
         }
-
       });
 
       finalCounts[`total_${key.replace(/[^a-zA-Z0-9]/g, "")}`] = uniqueSet.size;
-
     });
 
     // 💾 Save to MongoDB
     if (detections.length > 0) {
-
       const detectionsToSave = detections.map((d) => {
-
         return {
           fileName: videoFile.filename,
           textNote: userPrompt,
@@ -207,11 +195,9 @@ exports.uploadAndProcess = async (req, res) => {
           processingTime: processingTimeStr,
           videoUrl: videoUrl,
         };
-
       });
 
       await Detection.insertMany(detectionsToSave);
-
     }
 
     // 🚀 Final Response
@@ -226,18 +212,14 @@ exports.uploadAndProcess = async (req, res) => {
         screenshotUrl: d.imagePath ? `${BASE_URL}/${d.imagePath}` : "",
       })),
     });
-
   } catch (err) {
-
     console.error("❌ Node Error:", err);
 
     return res.status(500).json({
       error: err.message,
     });
-
   }
 };
-
 
 // exports.searchDetections = async (req, res) => {
 //   try {
@@ -303,11 +285,6 @@ exports.uploadAndProcess = async (req, res) => {
 //   }
 // };
 
-
-
-
-
-
 exports.searchDetections = async (req, res) => {
   try {
     const { object, textNote, trackingId, fileName } = req.query;
@@ -329,11 +306,11 @@ exports.searchDetections = async (req, res) => {
       {
         $group: {
           _id: "$trackingId",
-          doc: { $first: "$$ROOT" }
-        }
+          doc: { $first: "$$ROOT" },
+        },
       },
 
-      { $replaceRoot: { newRoot: "$doc" } }
+      { $replaceRoot: { newRoot: "$doc" } },
     ]);
 
     if (results.length === 0) {
@@ -350,7 +327,9 @@ exports.searchDetections = async (req, res) => {
     const searchTerms = (object || results[0].textNote || "")
       .toLowerCase()
       .split(/[\s,]+/)
-      .filter(w => !["with","and","wearing","in","a","wear"].includes(w));
+      .filter(
+        (w) => !["with", "and", "wearing", "in", "a", "wear"].includes(w),
+      );
 
     searchTerms.forEach((key) => {
       const uniqueSet = new Set();
@@ -377,10 +356,9 @@ exports.searchDetections = async (req, res) => {
         image_path: d.imagePath,
         bbox: d.bbox,
         processing_time: d.processingTime,
-        screenshotUrl: d.screenshotUrl
-      }))
+        screenshotUrl: d.screenshotUrl,
+      })),
     });
-
   } catch (err) {
     console.error("❌ Search Error:", err.message);
     return res.status(500).json({ error: err.message });
