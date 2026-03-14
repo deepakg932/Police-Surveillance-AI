@@ -577,6 +577,7 @@ async def process_video(req: Request):
     # =========================================
     # PLATE SEARCH MODE
     # =========================================
+    max_frames = 500
     if is_plate_query(prompt):
 
         print("Plate Search Mode")
@@ -590,8 +591,10 @@ async def process_video(req: Request):
 
             frame_id+=1
 
-            if frame_id%2!=0:
+            if frame_id%5!=0:
                 continue
+            if frame_id > max_frames:
+             break
 
             car_results=car_model(frame,classes=[2,3,5,7],conf=0.4)
 
