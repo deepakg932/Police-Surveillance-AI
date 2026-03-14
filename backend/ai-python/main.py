@@ -1,752 +1,3 @@
-# from fastapi import FastAPI, Request
-# from ultralytics import YOLOWorld
-# import cv2
-# import os
-# import torch
-# import numpy as np
-# import requests
-# from torchvision import models, transforms
-# from PIL import Image
-
-
-# app = FastAPI()
-
-# # YOLO-World v2 is excellent for zero-shot (any prompt)
-# model = YOLOWorld("yolov8s-worldv2.pt")
-
-# # Feature Extractor for Image-to-Video matching
-# resnet = models.resnet50(pretrained=True)
-# resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
-# resnet.eval()
-
-# SAVE_DIR = "detected_frames"
-# os.makedirs(SAVE_DIR, exist_ok=True)
-
-# transform = transforms.Compose([
-#     transforms.Resize((224, 224)),
-#     transforms.ToTensor(),
-#     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-# ])
-
-# def extract_features(img):
-#     img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-#     img = transform(img).unsqueeze(0)
-#     with torch.no_grad():
-#         return resnet(img).flatten().numpy()
-
-# @app.post("/process")
-# async def process_video(req: Request):
-#     data = await req.json()
-
-#     video_url = data.get("fileUrl")
-#     image_url = data.get("imageUrl")
-#     user_prompt = data.get("prompt", "person")
-
-#     print(f"\n🚀 [START] Processing: {user_prompt}")
-
-#     # 1. SET DYNAMIC CLASSES
-#     # This allows YOLO-World to prepare for your specific prompt
-#     prompt_list = [p.strip() for p in user_prompt.split(",")]
-#     model.set_classes(prompt_list)
-
-#     # 2. DOWNLOAD VIDEO
-#     video_path = "temp_video.mp4"
-#     if video_url:
-#         r = requests.get(video_url, stream=True)
-#         with open(video_path, "wb") as f:
-#             for chunk in r.iter_content(chunk_size=1024):
-#                 if chunk: f.write(chunk)
-
-#     # 3. DOWNLOAD REFERENCE IMAGE
-#     image_path = None
-#     if image_url:
-#         image_path = "temp_image.jpg"
-#         r = requests.get(image_url, stream=True)
-#         with open(image_path, "wb") as f:
-#             for chunk in r.iter_content(chunk_size=1024):
-#                 if chunk: f.write(chunk)
-
-#     ref_feat = None
-#     if image_path and os.path.exists(image_path):
-#         ref_img = cv2.imread(image_path)
-#         if ref_img is not None:
-#             ref_feat = extract_features(ref_img)
-
-#     # 4. DETECTION SETTINGS
-#     # Increased threshold to 0.55 to stop false positives seen in your images
-#     target_threshold = 0.55 
-#     cap = cv2.VideoCapture(video_path)
-#     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-#     results_list = []
-#     saved_ids = set()
-#     frame_id = 0
-
-#     while cap.isOpened():
-#         ret, frame = cap.read()
-#         if not ret: break
-#         frame_id += 1
-        
-#         # Skip frames for processing speed
-#         if frame_id % 5 != 0: continue 
-
-#         # Running Inference
-#         results = model.track(
-#             frame, 
-#             conf=0.25, # Lower internal conf to let tracker maintain IDs
-#             imgsz=640, 
-#             persist=True, 
-#             verbose=False,
-#             half=True if torch.cuda.is_available() else False 
-#         )
-
-#         if not results[0].boxes or results[0].boxes.id is None: continue
-
-#         boxes = results[0].boxes.xyxy.cpu().numpy()
-#         ids = results[0].boxes.id.int().cpu().numpy()
-#         confs = results[0].boxes.conf.cpu().numpy()
-#         clss = results[0].boxes.cls.int().cpu().numpy()
-
-#         for box, track_id, conf, cls_id in zip(boxes, ids, confs, clss):
-#             # FILTER 1: Confidence Check
-#             # Your images showed detections at 0.40; this will block them.
-#             if conf < target_threshold: 
-#                 continue
-
-#             if track_id in saved_ids: 
-#                 continue
-
-#             x1, y1, x2, y2 = map(int, box)
-#             label = prompt_list[cls_id]
-
-#             # FILTER 2: Visual Similarity (If image provided)
-#             if ref_feat is not None:
-#                 crop = frame[max(0, y1):y2, max(0, x1):x2]
-#                 if crop.size == 0: continue
-#                 obj_feat = extract_features(crop)
-#                 sim = np.dot(ref_feat, obj_feat) / (np.linalg.norm(ref_feat) * np.linalg.norm(obj_feat))
-                
-#                 # If similarity is low, it's not the person from the photo
-#                 if sim < 0.65: continue
-#                 conf = sim 
-
-#             # Save Detection
-#             img_path = os.path.join(SAVE_DIR, f"track_{track_id}.jpg")
-#             annotated = frame.copy()
-#             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-#             cv2.putText(annotated, f"{label} {conf:.2f}", (x1, y1-10), 
-#                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-#             cv2.imwrite(img_path, annotated)
-#             saved_ids.add(track_id)
-            
-#             results_list.append({
-#                 "object": label,
-#                 "confidence": float(conf),
-#                 "trackingId": int(track_id),
-#                 "timestamp": str(frame_id),
-#                 "image_path": img_path,
-#                 "bbox": [x1, y1, x2, y2]
-#             })
-
-#     cap.release()
-#     print(f"🏁 Finished. Detected {len(saved_ids)} unique objects.")
-#     return {"results": results_list}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# from fastapi import FastAPI, Request
-# from ultralytics import YOLO, YOLOWorld
-# import cv2
-# import os
-# import torch
-# import requests
-# import easyocr
-# import re
-# from difflib import SequenceMatcher
-
-# app = FastAPI()
-
-# # OCR
-# reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
-
-# # Models
-# car_model = YOLO("yolov8n.pt")
-# plate_model = YOLO("license_plate_detector.pt")
-
-# world_model = YOLOWorld("yolov8s-worldv2.pt")
-
-# SAVE_DIR = "detected_frames"
-# os.makedirs(SAVE_DIR, exist_ok=True)
-
-
-# def clean_text(text):
-#     return text.upper().replace(" ", "").replace("-", "").replace(".", "")
-
-
-# # def is_plate_number(text):
-# #     pattern = r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}'
-# #     return re.match(pattern, text)
-
-# def is_plate_search(text):
-
-#     # Full plate
-#     full_plate = r'^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$'
-
-#     # State code
-#     state_code = r'^[A-Z]{2}$'
-
-#     # RTO code
-#     rto_code = r'^[A-Z]{2}[0-9]{1,2}$'
-
-#     return (
-#         re.match(full_plate, text) or
-#         re.match(state_code, text) or
-#         re.match(rto_code, text)
-#     )
-
-# def perform_ocr(frame, box):
-
-#     x1,y1,x2,y2 = map(int,box)
-
-#     crop = frame[y1:y2,x1:x2]
-
-#     if crop.size == 0:
-#         return ""
-
-#     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-
-#     thresh = cv2.adaptiveThreshold(
-#         gray,255,
-#         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-#         cv2.THRESH_BINARY,11,2
-#     )
-
-#     results = reader.readtext(
-#         thresh,
-#         detail=0,
-#         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-#     )
-
-#     if len(results)==0:
-#         return ""
-
-#     return clean_text(results[0])
-
-
-# def similar(a,b):
-#     return SequenceMatcher(None,a,b).ratio()
-
-
-# @app.post("/process")
-# async def process_video(req: Request):
-
-#     data = await req.json()
-
-#     video_url = data.get("fileUrl")
-#     user_prompt = clean_text(data.get("prompt"))
-
-#     print("Searching:",user_prompt)
-
-#     video_path = "temp_video.mp4"
-
-#     r = requests.get(video_url,stream=True)
-
-#     with open(video_path,"wb") as f:
-#         for chunk in r.iter_content(1024):
-#             f.write(chunk)
-
-#     cap = cv2.VideoCapture(video_path)
-
-#     results_list=[]
-#     frame_id=0
-
-#     # 🔴 CASE 1 : NUMBER PLATE SEARCH
-#     if is_plate_search(user_prompt):
-
-#         print("Plate Detection Mode")
-
-#         while cap.isOpened():
-
-#             ret,frame = cap.read()
-#             if not ret:
-#                 break
-
-#             frame_id+=1
-
-#             if frame_id%2!=0:
-#                 continue
-
-#             car_results = car_model(frame,classes=[2],conf=0.4)
-
-#             for car in car_results[0].boxes.xyxy:
-
-#                 x1,y1,x2,y2 = map(int,car)
-
-#                 car_crop = frame[y1:y2,x1:x2]
-
-#                 plate_results = plate_model(car_crop,conf=0.25,imgsz=640)
-
-#                 for plate in plate_results[0].boxes.xyxy:
-
-#                     px1,py1,px2,py2 = map(int,plate)
-
-#                     px1+=x1
-#                     px2+=x1
-#                     py1+=y1
-#                     py2+=y1
-
-#                     ocr_text = perform_ocr(frame,[px1,py1,px2,py2])
-
-#                     print("Plate OCR:",ocr_text)
-#                     saved_plates = set()
-
-#                     if user_prompt in ocr_text or similar(user_prompt, ocr_text) > 0.75:
-#                         if ocr_text in saved_plates:
-#                             continue
-#                         saved_plates.add(ocr_text)
-                        
-
-#                         img_path=os.path.join(SAVE_DIR,f"plate_{frame_id}.jpg")
-
-#                         annotated=frame.copy()
-
-#                         cv2.rectangle(annotated,(px1,py1),(px2,py2),(0,255,0),2)
-#                         cv2.putText(annotated,ocr_text,(px1,py1-10),
-#                                     cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,0),2)
-
-#                         cv2.imwrite(img_path,annotated)
-
-#                         results_list.append({
-#                             "object":"license_plate",
-#                             "ocr_text":ocr_text,
-#                             "image_path":img_path,
-#                             "bbox":[px1,py1,px2,py2],
-#                             "timestamp":frame_id
-#                         })
-
-#     # 🔵 CASE 2 : NORMAL OBJECT SEARCH
-#     else:
-
-#         print("🧠 YOLOWorld Detection Mode")
-
-#         world_model.set_classes([user_prompt])
-
-#         while cap.isOpened():
-
-#             ret,frame = cap.read()
-
-#             if not ret:
-#                 break
-
-#             frame_id+=1
-
-#             if frame_id%3!=0:
-#                 continue
-
-#             results = world_model(frame,conf=0.35,imgsz=640)
-
-#             if not results[0].boxes:
-#                 continue
-
-#             boxes = results[0].boxes.xyxy.cpu().numpy()
-
-#             for box in boxes:
-
-#                 x1,y1,x2,y2 = map(int,box)
-
-#                 img_path=os.path.join(SAVE_DIR,f"{user_prompt}_{frame_id}.jpg")
-
-#                 annotated=frame.copy()
-
-#                 cv2.rectangle(annotated,(x1,y1),(x2,y2),(0,255,0),2)
-#                 cv2.putText(annotated,user_prompt,(x1,y1-10),
-#                             cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,0),2)
-
-#                 cv2.imwrite(img_path,annotated)
-
-#                 results_list.append({
-#                     "object":user_prompt,
-#                     "image_path":img_path,
-#                     "bbox":[x1,y1,x2,y2],
-#                     "timestamp":frame_id
-#                 })
-
-#     cap.release()
-
-#     return {"results":results_list}
-
-
-
-
-# from fastapi import FastAPI, Request
-# from ultralytics import YOLO, YOLOWorld
-# import cv2
-# import os
-# import torch
-# import requests
-# import easyocr
-# import numpy as np
-# from difflib import SequenceMatcher
-
-# app = FastAPI()
-
-# reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
-
-# car_model = YOLO("yolov8n.pt")
-# plate_model = YOLO("license_plate_detector.pt")
-# world_model = YOLOWorld("yolov8s-worldv2.pt")
-
-# SAVE_DIR = "detected_frames"
-# os.makedirs(SAVE_DIR, exist_ok=True)
-
-
-# # -----------------------------
-# # CLEAN TEXT
-# # -----------------------------
-# def clean_text(text):
-#     if not text:
-#         return ""
-#     return text.strip().upper()
-
-
-# # -----------------------------
-# # CHECK IF PROMPT IS PLATE SEARCH
-# # -----------------------------
-# def is_plate_query(prompt):
-
-#     for c in prompt:
-#         if c.isdigit():
-#             return True
-
-#     if len(prompt) <= 4:
-#         return True
-
-#     return False
-
-
-# # -----------------------------
-# # OCR FUNCTION
-# # -----------------------------
-# def perform_ocr(frame, box):
-
-#     x1,y1,x2,y2 = map(int,box)
-
-#     crop = frame[y1:y2,x1:x2]
-
-#     if crop.size == 0:
-#         return ""
-
-#     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-
-#     results = reader.readtext(
-#         gray,
-#         detail=0,
-#         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-#     )
-
-#     if len(results)==0:
-#         return ""
-
-#     return results[0].upper()
-
-
-# # -----------------------------
-# # STRING SIMILARITY
-# # -----------------------------
-# def similar(a,b):
-#     return SequenceMatcher(None,a,b).ratio()
-
-
-# # -----------------------------
-# # COLOR DETECTION
-# # -----------------------------
-# def detect_color(img):
-
-#     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-#     color_ranges = {
-#         "RED":[(0,120,70),(10,255,255)],
-#         "BLUE":[(94,80,2),(126,255,255)],
-#         "GREEN":[(25,52,72),(102,255,255)],
-#         "BLACK":[(0,0,0),(180,255,50)],
-#         "WHITE":[(0,0,200),(180,20,255)],
-#         "YELLOW":[(15,100,100),(35,255,255)]
-#     }
-
-#     for color,(lower,upper) in color_ranges.items():
-
-#         lower=np.array(lower)
-#         upper=np.array(upper)
-
-#         mask=cv2.inRange(hsv,lower,upper)
-
-#         ratio=cv2.countNonZero(mask)/(img.size/3)
-
-#         if ratio>0.1:
-#             return color
-
-#     return "UNKNOWN"
-
-
-# @app.post("/process")
-# async def process_video(req: Request):
-
-#     data = await req.json()
-
-#     video_url = data.get("fileUrl")
-#     prompt = clean_text(data.get("prompt"))
-
-#     print("Searching:",prompt)
-
-#     video_path="temp_video.mp4"
-
-#     r=requests.get(video_url,stream=True)
-
-#     with open(video_path,"wb") as f:
-#         for chunk in r.iter_content(1024):
-#             f.write(chunk)
-
-#     cap=cv2.VideoCapture(video_path)
-
-#     if not cap.isOpened():
-#         return {"error":"video open failed"}
-
-#     results_list=[]
-#     frame_id=0
-#     saved=set()
-
-#     # =========================================
-#     # PLATE SEARCH MODE
-#     # =========================================
-#     max_frames = 500
-#     if is_plate_query(prompt):
-
-#         print("Plate Search Mode")
-
-#         while cap.isOpened():
-
-#             ret,frame=cap.read()
-
-#             if not ret:
-#                 break
-
-#             frame_id+=1
-
-#             if frame_id%5!=0:
-#                 continue
-#             if frame_id > max_frames:
-#              break
-
-#             car_results=car_model(frame,classes=[2,3,5,7],conf=0.4)
-
-#             for car in car_results[0].boxes.xyxy:
-
-#                 x1,y1,x2,y2=map(int,car)
-
-#                 car_crop=frame[y1:y2,x1:x2]
-
-#                 plate_results=plate_model(car_crop,conf=0.25)
-
-#                 for plate in plate_results[0].boxes.xyxy:
-
-#                     px1,py1,px2,py2=map(int,plate)
-
-#                     px1+=x1
-#                     py1+=y1
-#                     px2+=x1
-#                     py2+=y1
-
-#                     ocr_text=perform_ocr(frame,[px1,py1,px2,py2])
-
-#                     if not ocr_text:
-#                         continue
-
-#                     if prompt in ocr_text or similar(prompt,ocr_text)>0.7:
-
-#                         if ocr_text in saved:
-#                             continue
-
-#                         saved.add(ocr_text)
-
-#                         img_path=os.path.join(
-#                             SAVE_DIR,
-#                             f"plate_{frame_id}.jpg"
-#                         )
-
-#                         annotated=frame.copy()
-
-#                         cv2.rectangle(
-#                             annotated,
-#                             (px1,py1),
-#                             (px2,py2),
-#                             (0,255,0),
-#                             2
-#                         )
-
-#                         cv2.putText(
-#                             annotated,
-#                             ocr_text,
-#                             (px1,py1-10),
-#                             cv2.FONT_HERSHEY_SIMPLEX,
-#                             0.8,
-#                             (0,255,0),
-#                             2
-#                         )
-
-#                         cv2.imwrite(img_path,annotated)
-
-#                         results_list.append({
-#                             "object":"license_plate",
-#                             "ocr_text":ocr_text,
-#                             "image_path":img_path,
-#                             "bbox":[px1,py1,px2,py2],
-#                             "timestamp":frame_id
-#                         })
-
-#     # =========================================
-#     # OBJECT + COLOR MODE
-#     # =========================================
-#     else:
-
-#         parts=prompt.split()
-
-#         if len(parts)==2:
-#             color_prompt=parts[0].upper()
-#             object_prompt=parts[1]
-#         else:
-#             color_prompt=None
-#             object_prompt=prompt
-
-#         world_model.set_classes([object_prompt])
-
-#         while cap.isOpened():
-
-#             ret,frame=cap.read()
-
-#             if not ret:
-#                 break
-
-#             frame_id+=1
-
-#             if frame_id%3!=0:
-#                 continue
-
-#             results=world_model(frame,conf=0.35,imgsz=640)
-
-#             if not results[0].boxes:
-#                 continue
-
-#             boxes=results[0].boxes.xyxy.cpu().numpy()
-
-#             for box in boxes:
-
-#                 x1,y1,x2,y2=map(int,box)
-
-#                 crop=frame[y1:y2,x1:x2]
-
-#                 color=detect_color(crop)
-
-#                 if color_prompt and color!=color_prompt:
-#                     continue
-
-#                 img_path=os.path.join(
-#                     SAVE_DIR,
-#                     f"{object_prompt}_{frame_id}.jpg"
-#                 )
-
-#                 annotated=frame.copy()
-
-#                 label=object_prompt
-
-#                 if color_prompt:
-#                     label=f"{color_prompt} {object_prompt}"
-
-#                 cv2.rectangle(annotated,(x1,y1),(x2,y2),(0,255,0),2)
-
-#                 cv2.putText(
-#                     annotated,
-#                     label,
-#                     (x1,y1-10),
-#                     cv2.FONT_HERSHEY_SIMPLEX,
-#                     0.8,
-#                     (0,255,0),
-#                     2
-#                 )
-
-#                 cv2.imwrite(img_path,annotated)
-
-#                 results_list.append({
-#                     "object":object_prompt,
-#                     "color":color,
-#                     "image_path":img_path,
-#                     "bbox":[x1,y1,x2,y2],
-#                     "timestamp":frame_id
-#                 })
-
-#     cap.release()
-
-#     return {"results":results_list}
-
-
 from fastapi import FastAPI, Request
 from ultralytics import YOLO
 import cv2
@@ -758,6 +9,7 @@ import numpy as np
 from difflib import SequenceMatcher
 import open_clip
 from groundingdino.util.inference import load_model, predict
+from PIL import Image
 
 app = FastAPI()
 
@@ -767,63 +19,45 @@ app = FastAPI()
 reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
 
 # -----------------------------
-# MODELS
+# YOLO MODELS
 # -----------------------------
 car_model = YOLO("yolov8n.pt")
 plate_model = YOLO("license_plate_detector.pt")
 
-ground_model = load_model(
-    "GroundingDINO_SwinT_OGC.py",
-    "groundingdino_swint_ogc.pth"
+# -----------------------------
+# GroundingDINO MODEL
+# -----------------------------
+gdino_model = load_model(
+    "groundingdino/config/GroundingDINO_SwinT_OGC.py",
+    "groundingdino_swint_ogc .pth"
 )
 
-clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
-    "ViT-B-32", pretrained="openai"
+# -----------------------------
+# CLIP MODEL
+# -----------------------------
+clip_model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32",
+    pretrained="openai"
 )
 
-clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
-clip_model.eval()
+tokenizer = open_clip.get_tokenizer("ViT-B-32")
 
+# -----------------------------
+# SAVE DIRECTORY
+# -----------------------------
 SAVE_DIR = "detected_frames"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-
 # -----------------------------
-# TEXT CLEAN
+# CLEAN TEXT
 # -----------------------------
 def clean_text(text):
     if not text:
         return ""
     return text.strip().upper()
 
-
 # -----------------------------
-# CLIP SIMILARITY
-# -----------------------------
-def clip_similarity(image, prompt):
-
-    from PIL import Image
-
-    image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-
-    image_input = clip_preprocess(image).unsqueeze(0)
-    text = clip_tokenizer([prompt])
-
-    with torch.no_grad():
-
-        image_features = clip_model.encode_image(image_input)
-        text_features = clip_model.encode_text(text)
-
-        image_features /= image_features.norm(dim=-1, keepdim=True)
-        text_features /= text_features.norm(dim=-1, keepdim=True)
-
-        similarity = (image_features @ text_features.T).item()
-
-    return similarity
-
-
-# -----------------------------
-# PLATE QUERY CHECK
+# CHECK IF PROMPT IS PLATE SEARCH
 # -----------------------------
 def is_plate_query(prompt):
 
@@ -836,15 +70,14 @@ def is_plate_query(prompt):
 
     return False
 
-
 # -----------------------------
-# OCR
+# OCR FUNCTION
 # -----------------------------
 def perform_ocr(frame, box):
 
-    x1, y1, x2, y2 = map(int, box)
+    x1,y1,x2,y2 = map(int,box)
 
-    crop = frame[y1:y2, x1:x2]
+    crop = frame[y1:y2,x1:x2]
 
     if crop.size == 0:
         return ""
@@ -857,18 +90,16 @@ def perform_ocr(frame, box):
         allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     )
 
-    if len(results) == 0:
+    if len(results)==0:
         return ""
 
     return results[0].upper()
 
-
 # -----------------------------
 # STRING SIMILARITY
 # -----------------------------
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
-
+def similar(a,b):
+    return SequenceMatcher(None,a,b).ratio()
 
 # -----------------------------
 # COLOR DETECTION
@@ -878,28 +109,72 @@ def detect_color(img):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     color_ranges = {
-        "RED": [(0, 120, 70), (10, 255, 255)],
-        "BLUE": [(94, 80, 2), (126, 255, 255)],
-        "GREEN": [(25, 52, 72), (102, 255, 255)],
-        "BLACK": [(0, 0, 0), (180, 255, 50)],
-        "WHITE": [(0, 0, 200), (180, 20, 255)],
-        "YELLOW": [(15, 100, 100), (35, 255, 255)]
+        "RED":[(0,120,70),(10,255,255)],
+        "BLUE":[(94,80,2),(126,255,255)],
+        "GREEN":[(25,52,72),(102,255,255)],
+        "BLACK":[(0,0,0),(180,255,50)],
+        "WHITE":[(0,0,200),(180,20,255)],
+        "YELLOW":[(15,100,100),(35,255,255)]
     }
 
-    for color, (lower, upper) in color_ranges.items():
+    for color,(lower,upper) in color_ranges.items():
 
-        lower = np.array(lower)
-        upper = np.array(upper)
+        lower=np.array(lower)
+        upper=np.array(upper)
 
-        mask = cv2.inRange(hsv, lower, upper)
+        mask=cv2.inRange(hsv,lower,upper)
 
-        ratio = cv2.countNonZero(mask) / (img.size / 3)
+        ratio=cv2.countNonZero(mask)/(img.size/3)
 
-        if ratio > 0.1:
+        if ratio>0.1:
             return color
 
     return "UNKNOWN"
 
+# -----------------------------
+# DYNAMIC PROMPT DETECTION
+# -----------------------------
+def detect_prompt_objects(frame, prompt):
+
+    image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    boxes, logits, phrases = predict(
+        model=gdino_model,
+        image=image_rgb,
+        caption=prompt,
+        box_threshold=0.3,
+        text_threshold=0.25
+    )
+
+    results = []
+
+    for box in boxes:
+
+        x1,y1,x2,y2 = map(int, box)
+
+        crop = frame[y1:y2, x1:x2]
+
+        if crop.size == 0:
+            continue
+
+        pil_img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+
+        image_input = preprocess(pil_img).unsqueeze(0)
+
+        text_input = tokenizer([prompt])
+
+        with torch.no_grad():
+
+            image_features = clip_model.encode_image(image_input)
+            text_features = clip_model.encode_text(text_input)
+
+            similarity = (image_features @ text_features.T).item()
+
+        if similarity > 20:
+
+            results.append((x1,y1,x2,y2))
+
+    return results
 
 # -----------------------------
 # MAIN API
@@ -910,192 +185,178 @@ async def process_video(req: Request):
     data = await req.json()
 
     video_url = data.get("fileUrl")
-    prompt = clean_text(data.get("prompt"))
+    prompt = data.get("prompt","person")
 
-    print("Searching:", prompt)
+    print("Searching:",prompt)
 
-    video_path = "temp_video.mp4"
+    video_path="temp_video.mp4"
 
-    r = requests.get(video_url, stream=True)
+    r=requests.get(video_url,stream=True)
 
-    with open(video_path, "wb") as f:
+    with open(video_path,"wb") as f:
         for chunk in r.iter_content(1024):
             f.write(chunk)
 
-    cap = cv2.VideoCapture(video_path)
+    cap=cv2.VideoCapture(video_path)
 
     if not cap.isOpened():
-        return {"error": "video open failed"}
+        return {"error":"video open failed"}
 
-    results_list = []
-    frame_id = 0
-    saved = set()
+    results_list=[]
+    frame_id=0
+    saved=set()
 
-    max_frames = 500
-
-    # ======================================
-    # NUMBER PLATE SEARCH
-    # ======================================
+    # =========================================
+    # PLATE SEARCH MODE
+    # =========================================
     if is_plate_query(prompt):
 
         print("Plate Search Mode")
 
         while cap.isOpened():
 
-            ret, frame = cap.read()
+            ret,frame=cap.read()
 
             if not ret:
                 break
 
-            frame_id += 1
+            frame_id+=1
 
-            if frame_id % 5 != 0:
+            if frame_id%2!=0:
                 continue
 
-            if frame_id > max_frames:
-                break
-
-            car_results = car_model(frame, classes=[2, 3, 5, 7], conf=0.4)
+            car_results=car_model(frame,classes=[2,3,5,7],conf=0.4)
 
             for car in car_results[0].boxes.xyxy:
 
-                x1, y1, x2, y2 = map(int, car)
+                x1,y1,x2,y2=map(int,car)
 
-                car_crop = frame[y1:y2, x1:x2]
+                car_crop=frame[y1:y2,x1:x2]
 
-                plate_results = plate_model(car_crop, conf=0.25)
+                plate_results=plate_model(car_crop,conf=0.25)
 
                 for plate in plate_results[0].boxes.xyxy:
 
-                    px1, py1, px2, py2 = map(int, plate)
+                    px1,py1,px2,py2=map(int,plate)
 
-                    px1 += x1
-                    py1 += y1
-                    px2 += x1
-                    py2 += y1
+                    px1+=x1
+                    py1+=y1
+                    px2+=x1
+                    py2+=y1
 
-                    ocr_text = perform_ocr(frame, [px1, py1, px2, py2])
+                    ocr_text=perform_ocr(frame,[px1,py1,px2,py2])
 
                     if not ocr_text:
                         continue
 
-                    if prompt in ocr_text or similar(prompt, ocr_text) > 0.75:
+                    if prompt in ocr_text or similar(prompt,ocr_text)>0.7:
 
                         if ocr_text in saved:
                             continue
 
                         saved.add(ocr_text)
 
-                        img_path = os.path.join(
+                        img_path=os.path.join(
                             SAVE_DIR,
                             f"plate_{frame_id}.jpg"
                         )
 
-                        annotated = frame.copy()
+                        annotated=frame.copy()
 
                         cv2.rectangle(
                             annotated,
-                            (px1, py1),
-                            (px2, py2),
-                            (0, 255, 0),
+                            (px1,py1),
+                            (px2,py2),
+                            (0,255,0),
                             2
                         )
 
                         cv2.putText(
                             annotated,
                             ocr_text,
-                            (px1, py1 - 10),
+                            (px1,py1-10),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.8,
-                            (0, 255, 0),
+                            (0,255,0),
                             2
                         )
 
-                        cv2.imwrite(img_path, annotated)
+                        cv2.imwrite(img_path,annotated)
 
                         results_list.append({
-                            "object": "license_plate",
-                            "ocr_text": ocr_text,
-                            "image_path": img_path,
-                            "bbox": [px1, py1, px2, py2],
-                            "timestamp": frame_id
+                            "object":"license_plate",
+                            "ocr_text":ocr_text,
+                            "image_path":img_path,
+                            "bbox":[px1,py1,px2,py2],
+                            "timestamp":frame_id
                         })
 
-    # ======================================
-    # DYNAMIC PROMPT DETECTION
-    # ======================================
+    # =========================================
+    # DYNAMIC PROMPT MODE
+    # =========================================
     else:
 
-        print("Prompt Detection Mode")
+        print("Dynamic Prompt Mode")
 
         while cap.isOpened():
 
-            ret, frame = cap.read()
+            ret,frame=cap.read()
 
             if not ret:
                 break
 
-            frame_id += 1
+            frame_id+=1
 
-            if frame_id % 3 != 0:
+            if frame_id%3!=0:
                 continue
 
-            boxes, logits, phrases = predict(
-                model=ground_model,
-                image=frame,
-                caption=prompt,
-                box_threshold=0.35,
-                text_threshold=0.25
-            )
+            boxes = detect_prompt_objects(frame, prompt)
 
             for box in boxes:
 
-                x1, y1, x2, y2 = map(int, box)
+                x1,y1,x2,y2 = box
 
-                crop = frame[y1:y2, x1:x2]
+                crop=frame[y1:y2,x1:x2]
 
-                if crop.size == 0:
-                    continue
+                color=detect_color(crop)
 
-                similarity = clip_similarity(crop, prompt)
-
-                if similarity < 0.25:
-                    continue
-
-                img_path = os.path.join(
+                img_path=os.path.join(
                     SAVE_DIR,
-                    f"{prompt}_{frame_id}.jpg"
+                    f"prompt_{frame_id}.jpg"
                 )
 
-                annotated = frame.copy()
+                annotated=frame.copy()
+
+                label=f"{prompt}"
 
                 cv2.rectangle(
                     annotated,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 255, 0),
+                    (x1,y1),
+                    (x2,y2),
+                    (0,255,0),
                     2
                 )
 
                 cv2.putText(
                     annotated,
-                    prompt,
-                    (x1, y1 - 10),
+                    label,
+                    (x1,y1-10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.8,
-                    (0, 255, 0),
+                    (0,255,0),
                     2
                 )
 
-                cv2.imwrite(img_path, annotated)
+                cv2.imwrite(img_path,annotated)
 
                 results_list.append({
-                    "object": prompt,
-                    "image_path": img_path,
-                    "bbox": [x1, y1, x2, y2],
-                    "timestamp": frame_id
+                    "prompt":prompt,
+                    "color":color,
+                    "image_path":img_path,
+                    "bbox":[x1,y1,x2,y2],
+                    "timestamp":frame_id
                 })
 
     cap.release()
 
-    return {"results": results_list}
+    return {"results":results_list}

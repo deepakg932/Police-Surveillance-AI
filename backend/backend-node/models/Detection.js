@@ -2,29 +2,51 @@ const mongoose = require("mongoose");
 
 const detectionSchema = new mongoose.Schema({
 
-  fileName: String,
+  fileName: {
+    type: String,
+    index: true
+  },
 
-  imageName: String,
+  imageName: {
+    type: String,
+    default: ""
+  },
 
-  imagePath: String,
+  imagePath: {
+    type: String,
+    default: ""
+  },
 
-  screenshotUrl: String,
+  screenshotUrl: {
+    type: String,
+    default: ""
+  },
 
   videoUrl: {
     type: String,
     index: true
   },
 
-  textNote: String,
-
-  object: {
+  textNote: {
     type: String,
     index: true
   },
 
-  vehicle: String,
+  object: {
+    type: String,
+    index: true,
+    default: "unknown"
+  },
 
-  color: String,
+  vehicle: {
+    type: String,
+    default: ""
+  },
+
+  color: {
+    type: String,
+    default: ""
+  },
 
   helmet: {
     type: String,
@@ -34,10 +56,14 @@ const detectionSchema = new mongoose.Schema({
 
   ocrText: {
     type: String,
-    index: true
+    index: true,
+    default: ""
   },
 
-  confidence: Number,
+  confidence: {
+    type: Number,
+    default: 0
+  },
 
   trackingId: {
     type: String,
@@ -46,16 +72,29 @@ const detectionSchema = new mongoose.Schema({
 
   bbox: {
     type: [Number],
-    validate: v => v.length === 4
+    default: [],
+    validate: {
+      validator: function(v) {
+        return v.length === 4 || v.length === 0;
+      },
+      message: "bbox must contain 4 numbers"
+    }
   },
 
-  timestamp: Number,
+  timestamp: {
+    type: Number,
+    default: 0
+  },
 
-  processingTime: String,
+  processingTime: {
+    type: String,
+    default: ""
+  },
 
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
+    index: true
   }
 
 });
