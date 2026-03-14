@@ -1,1 +1,7 @@
-groundingdino_swint_ogc.pth
+*.pth
+*.pt
+*.weights
+*.onnx
+env/
+__pycache__/
+detected_frames/
