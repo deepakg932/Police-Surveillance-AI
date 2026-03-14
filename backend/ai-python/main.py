@@ -7,16 +7,15 @@ import requests
 import easyocr
 import numpy as np
 from difflib import SequenceMatcher
-import open_clip
-from groundingdino.util.inference import load_model, predict
 from PIL import Image
+from groundingdino.util.inference import load_model, predict
 
 app = FastAPI()
 
 # -----------------------------
 # OCR
 # -----------------------------
-reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+reader = easyocr.Reader(['en'], gpu=False)
 
 # -----------------------------
 # YOLO MODELS
@@ -34,31 +33,23 @@ gdino_model = load_model(
 )
 
 # -----------------------------
-# CLIP MODEL
-# -----------------------------
-clip_model, _, preprocess = open_clip.create_model_and_transforms(
-    "ViT-B-32",
-    pretrained="openai"
-)
-
-tokenizer = open_clip.get_tokenizer("ViT-B-32")
-
-# -----------------------------
 # SAVE DIRECTORY
 # -----------------------------
 SAVE_DIR = "detected_frames"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
+
 # -----------------------------
-# CLEAN TEXT
+# TEXT CLEAN
 # -----------------------------
 def clean_text(text):
     if not text:
         return ""
     return text.strip().upper()
 
+
 # -----------------------------
-# CHECK IF PROMPT IS PLATE SEARCH
+# CHECK PLATE QUERY
 # -----------------------------
 def is_plate_query(prompt):
 
@@ -71,8 +62,9 @@ def is_plate_query(prompt):
 
     return False
 
+
 # -----------------------------
-# OCR FUNCTION
+# OCR
 # -----------------------------
 def perform_ocr(frame, box):
 
@@ -96,11 +88,13 @@ def perform_ocr(frame, box):
 
     return results[0].upper()
 
+
 # -----------------------------
-# STRING SIMILARITY
+# SIMILARITY
 # -----------------------------
 def similar(a,b):
     return SequenceMatcher(None,a,b).ratio()
+
 
 # -----------------------------
 # COLOR DETECTION
@@ -132,16 +126,16 @@ def detect_color(img):
 
     return "UNKNOWN"
 
+
 # -----------------------------
-# DYNAMIC PROMPT DETECTION
+# PROMPT DETECTION
 # -----------------------------
 def detect_prompt_objects(frame, prompt):
 
-    # convert BGR → RGB
     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    # convert numpy → torch tensor
-    image = torch.from_numpy(image_rgb).permute(2,0,1).float()
+    image = torch.from_numpy(image_rgb).permute(2,0,1).float()/255
+    image = image.unsqueeze(0)
 
     boxes, logits, phrases = predict(
         model=gdino_model,
@@ -155,6 +149,7 @@ def detect_prompt_objects(frame, prompt):
     results = []
 
     for box in boxes:
+
         x1,y1,x2,y2 = map(int, box)
 
         if x2 <= x1 or y2 <= y1:
@@ -163,6 +158,7 @@ def detect_prompt_objects(frame, prompt):
         results.append((x1,y1,x2,y2))
 
     return results
+
 
 # -----------------------------
 # MAIN API
@@ -194,12 +190,12 @@ async def process_video(req: Request):
     frame_id=0
     saved=set()
 
-    # =========================================
-    # PLATE SEARCH MODE
-    # =========================================
+    # -----------------------------
+    # LICENSE PLATE MODE
+    # -----------------------------
     if is_plate_query(prompt):
 
-        print("Plate Search Mode")
+        print("Plate Mode")
 
         while cap.isOpened():
 
@@ -239,52 +235,26 @@ async def process_video(req: Request):
 
                     if prompt in ocr_text or similar(prompt,ocr_text)>0.7:
 
-                        if ocr_text in saved:
-                            continue
-
-                        saved.add(ocr_text)
-
                         img_path=os.path.join(
                             SAVE_DIR,
                             f"plate_{frame_id}.jpg"
                         )
 
-                        annotated=frame.copy()
-
-                        cv2.rectangle(
-                            annotated,
-                            (px1,py1),
-                            (px2,py2),
-                            (0,255,0),
-                            2
-                        )
-
-                        cv2.putText(
-                            annotated,
-                            ocr_text,
-                            (px1,py1-10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.8,
-                            (0,255,0),
-                            2
-                        )
-
-                        cv2.imwrite(img_path,annotated)
+                        cv2.imwrite(img_path,frame)
 
                         results_list.append({
                             "object":"license_plate",
                             "ocr_text":ocr_text,
                             "image_path":img_path,
-                            "bbox":[px1,py1,px2,py2],
                             "timestamp":frame_id
                         })
 
-    # =========================================
-    # DYNAMIC PROMPT MODE
-    # =========================================
+    # -----------------------------
+    # PROMPT MODE
+    # -----------------------------
     else:
 
-        print("Dynamic Prompt Mode")
+        print("Prompt Mode")
 
         while cap.isOpened():
 
@@ -313,29 +283,7 @@ async def process_video(req: Request):
                     f"prompt_{frame_id}.jpg"
                 )
 
-                annotated=frame.copy()
-
-                label=f"{prompt}"
-
-                cv2.rectangle(
-                    annotated,
-                    (x1,y1),
-                    (x2,y2),
-                    (0,255,0),
-                    2
-                )
-
-                cv2.putText(
-                    annotated,
-                    label,
-                    (x1,y1-10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0,255,0),
-                    2
-                )
-
-                cv2.imwrite(img_path,annotated)
+                cv2.imwrite(img_path,frame)
 
                 results_list.append({
                     "prompt":prompt,
