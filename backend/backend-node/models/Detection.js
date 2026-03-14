@@ -3,21 +3,39 @@ const mongoose = require("mongoose");
 const detectionSchema = new mongoose.Schema({
 
   fileName: String,
+
   imageName: String,
 
   imagePath: String,
+
   screenshotUrl: String,
 
-  videoUrl: String,
+  videoUrl: {
+    type: String,
+    index: true
+  },
 
   textNote: String,
 
-  object: String,
-  vehicle: String,
-  color: String,
-  helmet: Boolean,
+  object: {
+    type: String,
+    index: true
+  },
 
-  ocrText: String,
+  vehicle: String,
+
+  color: String,
+
+  helmet: {
+    type: String,
+    enum: ["helmet", "no_helmet", "unknown"],
+    default: "unknown"
+  },
+
+  ocrText: {
+    type: String,
+    index: true
+  },
 
   confidence: Number,
 
@@ -26,7 +44,10 @@ const detectionSchema = new mongoose.Schema({
     index: true
   },
 
-  bbox: [Number],
+  bbox: {
+    type: [Number],
+    validate: v => v.length === 4
+  },
 
   timestamp: Number,
 
