@@ -4,8 +4,10 @@ const Detection = require("../models/Detection.js");
 exports.uploadAndProcess = async (req, res) => {
   try {
     const videoFile = req.files?.file?.[0];
+    console.log(videoFile,"kkk")
     const imageFile = req.files?.image?.[0];
     const userPrompt = req.body.text || "person";
+    console.log(userPrompt,"okk")
 
     if (!videoFile) {
       return res.status(400).json({ message: "Video file missing" });

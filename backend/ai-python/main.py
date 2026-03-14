@@ -29,7 +29,8 @@ plate_model = YOLO("license_plate_detector.pt")
 # -----------------------------
 gdino_model = load_model(
     "groundingdino/config/GroundingDINO_SwinT_OGC.py",
-    "groundingdino_swint_ogc .pth"
+    "groundingdino_swint_ogc.pth",
+    device="cpu"
 )
 
 # -----------------------------
@@ -136,43 +137,30 @@ def detect_color(img):
 # -----------------------------
 def detect_prompt_objects(frame, prompt):
 
+    # convert BGR → RGB
     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    # convert numpy → torch tensor
+    image = torch.from_numpy(image_rgb).permute(2,0,1).float()
 
     boxes, logits, phrases = predict(
         model=gdino_model,
-        image=image_rgb,
+        image=image,
         caption=prompt,
         box_threshold=0.3,
-        text_threshold=0.25
+        text_threshold=0.25,
+        device="cpu"
     )
 
     results = []
 
     for box in boxes:
-
         x1,y1,x2,y2 = map(int, box)
 
-        crop = frame[y1:y2, x1:x2]
-
-        if crop.size == 0:
+        if x2 <= x1 or y2 <= y1:
             continue
 
-        pil_img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-
-        image_input = preprocess(pil_img).unsqueeze(0)
-
-        text_input = tokenizer([prompt])
-
-        with torch.no_grad():
-
-            image_features = clip_model.encode_image(image_input)
-            text_features = clip_model.encode_text(text_input)
-
-            similarity = (image_features @ text_features.T).item()
-
-        if similarity > 20:
-
-            results.append((x1,y1,x2,y2))
+        results.append((x1,y1,x2,y2))
 
     return results
 
