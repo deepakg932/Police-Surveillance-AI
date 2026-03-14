@@ -129,7 +129,7 @@ exports.uploadAndProcess = async (req, res) => {
         prompt: userPrompt,
       },
       {
-        timeout:0,
+        timeout:3600000,
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
       },
