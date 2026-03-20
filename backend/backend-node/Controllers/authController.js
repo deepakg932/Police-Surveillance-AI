@@ -29,11 +29,11 @@ console.log(req.body,'req,body')
     }
 
 
-    const existingBadge = await User.findOne({ badgeNumber });
-    if (existingBadge) {
-      return res.status(400).json({ message: "Badge number already used" });
-    }
-console.log(existingBadge,"existingBadge")
+    // const existingBadge = await User.findOne({ badgeNumber });
+    // if (existingBadge) {
+    //   return res.status(400).json({ message: "Badge number already used" });
+    // }
+// console.log(existingBadge,"existingBadge")
    
     const hashedPassword = await bcrypt.hash(password, 10);
     console.log(hashedPassword,"hashedPassword")
@@ -77,10 +77,11 @@ const login = async (req, res) => {
 
     
     const token = jwt.sign(
-      {
-        id: user._id,
-        role: user.role,
-      },
+      // {
+      //   id: user._id,
+      //   role: user.role,
+      // },
+      { userId: user._id },
       JWT_SECRET,
       { expiresIn: "7d" }
     );

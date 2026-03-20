@@ -3,7 +3,8 @@ const { JWT_SECRET } = require("../config");
 
 const authMiddleware = (req, res, next) => {
   try {
-    let token = req.headers.authorization;
+    // let token = req.headers.authorization;
+        const token = req.headers.authorization?.split(" ")[1];
 
     console.log("Raw token:", token);
 
@@ -19,8 +20,9 @@ const authMiddleware = (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
 
     console.log("Decoded user:", decoded);
+    req.userId = decoded.userId; 
 
-    req.user = decoded;
+    // req.userI = decoded;
 
     next();
   } catch (err) {

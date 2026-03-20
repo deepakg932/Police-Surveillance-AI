@@ -6,22 +6,6 @@ const { uploadAndProcess, searchDetections, askVideoQuestion } = require("../Con
 const authMiddleware = require("../middleware/authMiddleware.js");
 const { multiUpload} = require("../middleware/upload.js");
 
-// const storage = multer.diskStorage({
-//   destination: "uploads/",
-//   filename: (req, file, cb) => {
-//     cb(null, Date.now() + "-" + file.originalname);
-//   },
-// });
-
-// const upload = multer({ storage });
-
-
-// const upload = multer({
-//   storage: storage,
-//   limits: {
-//     fileSize: 500 * 1024 * 1024, // 500MB max
-//   },
-// });
 
 
 
