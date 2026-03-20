@@ -88,9 +88,9 @@ exports.searchDetections = async (req, res) => {
     const userId = req.userId;
     const { object, textNote, trackingId, fileName } = req.query;
 
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    // if (!userId) {
+    //   return res.status(401).json({ message: "Unauthorized" });
+    // }
 
     // ✅ FIXED
     let match = {
