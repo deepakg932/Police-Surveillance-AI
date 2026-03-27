@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+detected_frames/
+temp_video.mp4
+main copy.py
+main copy 2.py
+.git
