@@ -6,7 +6,6 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-// import VITE_API_BASE_URL from "";
 
 const AuthContext = createContext(null);
 

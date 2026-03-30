@@ -7,7 +7,6 @@ const RegisterForm = ({ onRegister, isLoading, error, onSwitchToLogin }) => {
     email: '',
     password: '',
     confirmPassword: '',
-    badgeNumber: '',
     department: '',
     phone: '',
     agreeTerms: false
@@ -54,8 +53,6 @@ const RegisterForm = ({ onRegister, isLoading, error, onSwitchToLogin }) => {
       errors.email = 'Email is required';
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       errors.email = 'Email is invalid';
-    } else if (!formData.email.endsWith('.gov') && !formData.email.includes('police')) {
-      errors.email = 'Must use government or police email';
     }
 
     // Password validation
@@ -79,13 +76,6 @@ const RegisterForm = ({ onRegister, isLoading, error, onSwitchToLogin }) => {
       errors.confirmPassword = 'Please confirm your password';
     } else if (formData.password !== formData.confirmPassword) {
       errors.confirmPassword = 'Passwords do not match';
-    }
-
-    // Badge Number validation
-    if (!formData.badgeNumber.trim()) {
-      errors.badgeNumber = 'Badge number is required';
-    } else if (!/^\d{6,10}$/.test(formData.badgeNumber)) {
-      errors.badgeNumber = 'Badge number must be 6-10 digits';
     }
 
     // Department validation
@@ -326,32 +316,7 @@ const RegisterForm = ({ onRegister, isLoading, error, onSwitchToLogin }) => {
               )}
             </div>
 
-            {/* Badge Number & Department Row */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="badgeNumber" className="block text-sm font-medium text-gray-300 mb-1">
-                  Badge Number <span className="text-red-400">*</span>
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Shield className="h-5 w-5 text-gray-500" />
-                  </div>
-                  <input
-                    id="badgeNumber"
-                    name="badgeNumber"
-                    type="text"
-                    value={formData.badgeNumber}
-                    onChange={handleChange}
-                    className={`appearance-none relative block w-full pl-10 pr-3 py-3 border ${
-                      formErrors.badgeNumber ? 'border-red-500' : 'border-gray-600'
-                    } bg-gray-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors placeholder-gray-400`}
-                    placeholder="123456"
-                  />
-                </div>
-                {formErrors.badgeNumber && (
-                  <p className="mt-1 text-sm text-red-400">{formErrors.badgeNumber}</p>
-                )}
-              </div>
+            {/* Department Row */}
 
               <div>
                 <label htmlFor="department" className="block text-sm font-medium text-gray-300 mb-1">
@@ -378,7 +343,6 @@ const RegisterForm = ({ onRegister, isLoading, error, onSwitchToLogin }) => {
                   <p className="mt-1 text-sm text-red-400">{formErrors.department}</p>
                 )}
               </div>
-            </div>
 
             {/* Phone Field */}
             <div>

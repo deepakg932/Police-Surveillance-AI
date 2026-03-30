@@ -9,7 +9,7 @@ const DetectedPersonsTable = ({ persons }) => {
     persons,
     "fgggcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfgggggggg",
   );
-  
+
   // Map of colors to their actual classes
   const colorClasses = {
     blue: {
@@ -117,18 +117,17 @@ const DetectedPersonsTable = ({ persons }) => {
                   <td className="px-4 py-3 text-white font-mono text-sm">
                     #{person.trackingId}
                   </td>
-                  
+
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {person.fullImageUrl || person.thumbnail ? (
+                    {person.image_path ? (
                       <img
-                        src={person.fullImageUrl || person.thumbnail}
+                        src={`https://workingcart.com/files/${person.image_path}`}
                         alt={`Person ${person.id}`}
                         className="h-16 w-16 object-cover rounded-lg border border-gray-700 cursor-pointer hover:opacity-80 transition-opacity"
                         onClick={() => handleViewDetails(person)}
-                     
                       />
                     ) : (
-                      <div 
+                      <div
                         className="h-16 w-16 bg-gray-700 rounded-lg flex items-center justify-center cursor-pointer hover:bg-gray-600 transition-colors"
                         onClick={() => handleViewDetails(person)}
                       >
@@ -163,7 +162,11 @@ const DetectedPersonsTable = ({ persons }) => {
                         "Shirt",
                         "green",
                       )}
-                      {getAttributeBadge(person.blueShirt, "Blue Shirt", "blue")}
+                      {getAttributeBadge(
+                        person.blueShirt,
+                        "Blue Shirt",
+                        "blue",
+                      )}
                       {getAttributeBadge(
                         person.motorcycle,
                         "Motorcycle",
@@ -184,14 +187,14 @@ const DetectedPersonsTable = ({ persons }) => {
                     <div className="flex items-center">
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
-                          person.confidence > 80
+                          person.confidencePercentage >= 72
                             ? "bg-green-500/20 text-green-400"
-                            : person.confidence > 60
+                            : person.confidencePercentage > 60
                               ? "bg-yellow-500/20 text-yellow-400"
                               : "bg-red-500/20 text-red-400"
                         }`}
                       >
-                        {person.confidence}%
+                        {person.confidencePercentage}%
                       </span>
                     </div>
                   </td>
@@ -248,15 +251,15 @@ const DetectedPersonsTable = ({ persons }) => {
                 <X className="h-5 w-5 text-gray-400" />
               </button>
             </div>
-            
+
             <div className="p-6 space-y-6">
               {/* Full Size Image */}
               <div className="space-y-2">
                 <h4 className="text-sm font-medium text-gray-400">Image</h4>
                 <div className="bg-gray-900 rounded-lg border border-gray-700 p-2">
-                  {(selectedPerson.fullImageUrl || selectedPerson.thumbnail) ? (
+                  {selectedPerson.image_path || selectedPerson.thumbnail ? (
                     <img
-                      src={selectedPerson.fullImageUrl || selectedPerson.thumbnail}
+                      src={`https://workingcart.com/files/${selectedPerson.image_path}`}
                       alt={`Person ${selectedPerson.id}`}
                       className="w-full h-auto max-h-96 object-contain rounded-lg"
                       onError={(e) => {
@@ -280,25 +283,28 @@ const DetectedPersonsTable = ({ persons }) => {
                     #{selectedPerson.trackingId}
                   </p>
                 </div>
-                
+
                 <div className="space-y-1">
                   <p className="text-xs text-gray-500">Object ID</p>
                   <p className="text-sm font-medium text-white font-mono">
-                    {selectedPerson.id || 'N/A'}
+                    {selectedPerson.id || "N/A"}
                   </p>
                 </div>
 
                 <div className="space-y-1">
                   <p className="text-xs text-gray-500">Timestamp</p>
                   <p className="text-sm font-medium text-white">
-                    {selectedPerson.timestamp || selectedPerson.startTime || 'N/A'}s
+                    {selectedPerson.timestamp ||
+                      selectedPerson.startTime ||
+                      "N/A"}
+                    s
                   </p>
                 </div>
 
                 <div className="space-y-1">
                   <p className="text-xs text-gray-500">Object Type</p>
                   <p className="text-sm font-medium text-white">
-                    {selectedPerson.object || 'Person'}
+                    {selectedPerson.object || "Person"}
                   </p>
                 </div>
 
@@ -306,86 +312,116 @@ const DetectedPersonsTable = ({ persons }) => {
                   <p className="text-xs text-gray-500">Confidence</p>
                   <span
                     className={`inline-block px-2 py-1 rounded text-xs font-medium ${
-                      selectedPerson.confidence > 80
+                      selectedPerson.confidencePercentage > 80
                         ? "bg-green-500/20 text-green-400"
-                        : selectedPerson.confidence > 60
+                        : selectedPerson.confidencePercentage > 60
                           ? "bg-yellow-500/20 text-yellow-400"
                           : "bg-red-500/20 text-red-400"
                     }`}
                   >
-                    {selectedPerson.confidence}%
+                    {selectedPerson.confidencePercentage}%
                   </span>
                 </div>
 
                 <div className="space-y-1">
                   <p className="text-xs text-gray-500">Bounding Box</p>
                   <p className="text-sm font-medium text-white">
-                    {selectedPerson.bbox ? JSON.stringify(selectedPerson.bbox) : 'N/A'}
+                    {selectedPerson.bbox
+                      ? JSON.stringify(selectedPerson.bbox)
+                      : "N/A"}
                   </p>
                 </div>
               </div>
 
               {/* Attributes */}
               <div className="space-y-2">
-                <h4 className="text-sm font-medium text-gray-400">Attributes</h4>
+                <h4 className="text-sm font-medium text-gray-400">
+                  Attributes
+                </h4>
                 <div className="flex flex-wrap gap-2">
                   {getAttributeBadge(
-                    selectedPerson.helmet || selectedPerson.object?.includes("helmet"),
+                    selectedPerson.helmet ||
+                      selectedPerson.object?.includes("helmet"),
                     "Helmet",
                     "yellow",
                   )}
                   {getAttributeBadge(
-                    selectedPerson.blackShirt || selectedPerson.object?.includes("black"),
+                    selectedPerson.blackShirt ||
+                      selectedPerson.object?.includes("black"),
                     "Black",
                     "purple",
                   )}
                   {getAttributeBadge(
-                    selectedPerson.shirt || selectedPerson.object?.includes("shirt"),
+                    selectedPerson.shirt ||
+                      selectedPerson.object?.includes("shirt"),
                     "Shirt",
                     "green",
                   )}
-                  {getAttributeBadge(selectedPerson.blueShirt, "Blue Shirt", "blue")}
-                  {getAttributeBadge(selectedPerson.motorcycle, "Motorcycle", "green")}
+                  {getAttributeBadge(
+                    selectedPerson.blueShirt,
+                    "Blue Shirt",
+                    "blue",
+                  )}
+                  {getAttributeBadge(
+                    selectedPerson.motorcycle,
+                    "Motorcycle",
+                    "green",
+                  )}
                   {!selectedPerson.helmet &&
                     !selectedPerson.blueShirt &&
                     !selectedPerson.motorcycle &&
                     !selectedPerson.blackShirt &&
                     !selectedPerson.shirt && (
-                      <span className="text-xs text-gray-500">No attributes</span>
+                      <span className="text-xs text-gray-500">
+                        No attributes
+                      </span>
                     )}
                 </div>
               </div>
 
               {/* Additional Data */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium text-gray-400">Additional Information</h4>
+              {/* <div className="space-y-2">
+                <h4 className="text-sm font-medium text-gray-400">
+                  Additional Information
+                </h4>
                 <div className="bg-gray-900/50 rounded-lg p-3 space-y-2">
                   {selectedPerson.image_path && (
                     <div>
                       <p className="text-xs text-gray-500">Image Path</p>
-                      <p className="text-xs text-gray-400 break-all">{selectedPerson.image_path}</p>
+                      <p className="text-xs text-gray-400 break-all">
+                        {selectedPerson.image_path}
+                      </p>
                     </div>
                   )}
-                  {selectedPerson.screenshotUrl && (
+                  {selectedPerson.image_path && (
                     <div>
                       <p className="text-xs text-gray-500">Screenshot URL</p>
-                      <p className="text-xs text-gray-400 break-all">{selectedPerson.screenshotUrl}</p>
+                      <p className="text-xs text-gray-400 break-all">
+                        {`https://workingcart.com/files/${selectedPerson.image_path}`}
+                      </p>
                     </div>
                   )}
                   {selectedPerson.object && (
                     <div>
                       <p className="text-xs text-gray-500">Object String</p>
-                      <p className="text-xs text-gray-400">{selectedPerson.object}</p>
+                      <p className="text-xs text-gray-400">
+                        {selectedPerson.object}
+                      </p>
                     </div>
                   )}
                 </div>
-              </div>
-
+              </div> */}
+              
+              
               {/* Action Buttons */}
               <div className="flex justify-end space-x-3 pt-4 border-t border-gray-700">
-                {selectedPerson.screenshotUrl && (
+                {selectedPerson.image_path && (
                   <button
-                    onClick={() => handleViewThumbnail(selectedPerson.screenshotUrl)}
+                    onClick={() =>
+                      handleViewThumbnail(
+                        `https://workingcart.com/files/${selectedPerson.image_path}`,
+                      )
+                    }
                     className="px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 transition-colors flex items-center space-x-2"
                   >
                     <Eye className="h-4 w-4" />

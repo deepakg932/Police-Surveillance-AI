@@ -1,18 +1,51 @@
-import React, { useState } from "react";
+// components/Upload/VideoUploadForm.jsx
+import React, { useState, useEffect } from "react";
 import { Upload, Video, Image, FileText, X, Send, Plus, Loader2 } from "lucide-react";
+import { useUpload } from "../contexts/UploadContext";
 
 const VideoUploadForm = ({
-  isUploading,
-  uploadProgress,
-  onFileUpload,
   onSubmit,
 }) => {
-  const [mainVideo, setMainVideo] = useState(null);
-  const [additionalImage, setAdditionalImage] = useState(null);
-  const [additionalText, setAdditionalText] = useState("");
-  const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
-  const [activeTab, setActiveTab] = useState("video");
-  const [isSubmitting, setIsSubmitting] = useState(false); // Add local submitting state
+  const { 
+    uploadProgress, 
+    isUploading, 
+    uploadData,
+    startUpload, 
+    updateProgress, 
+    completeUpload, 
+    failUpload,
+    updateUploadData,
+    clearUploadData
+  } = useUpload();
+  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Initialize from context or use defaults
+  const [mainVideo, setMainVideo] = useState(uploadData?.video || null);
+  const [additionalImage, setAdditionalImage] = useState(uploadData?.image || null);
+  const [additionalText, setAdditionalText] = useState(uploadData?.text || "");
+  const [imagePreviewUrl, setImagePreviewUrl] = useState(uploadData?.imagePreviewUrl || null);
+  const [activeTab, setActiveTab] = useState(uploadData?.activeTab || "video");
+
+  // Update context when local state changes
+  useEffect(() => {
+    updateUploadData({
+      video: mainVideo,
+      image: additionalImage,
+      text: additionalText,
+      imagePreviewUrl,
+      activeTab
+    });
+  }, [mainVideo, additionalImage, additionalText, imagePreviewUrl, activeTab, updateUploadData]);
+
+  // Clean up preview URL on unmount
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl && imagePreviewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreviewUrl);
+      }
+    };
+  }, [imagePreviewUrl]);
 
   const handleVideoSelect = (e) => {
     const file = e.target.files[0];
@@ -25,7 +58,7 @@ const VideoUploadForm = ({
     const file = e.target.files[0];
     if (file && file.type.startsWith("image/")) {
       setAdditionalImage(file);
-      if (imagePreviewUrl) {
+      if (imagePreviewUrl && imagePreviewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(imagePreviewUrl);
       }
       const url = URL.createObjectURL(file);
@@ -40,7 +73,7 @@ const VideoUploadForm = ({
   };
 
   const handleRemoveImage = () => {
-    if (imagePreviewUrl) {
+    if (imagePreviewUrl && imagePreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(imagePreviewUrl);
     }
     setAdditionalImage(null);
@@ -58,13 +91,22 @@ const VideoUploadForm = ({
     setAdditionalText(newValue);
   };
 
+  // Simulate upload progress
+  const simulateUpload = async () => {
+    for (let i = 0; i <= 100; i += 10) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      updateProgress(i);
+    }
+  };
+
   const handleMainSubmit = async () => {
     if (!mainVideo) {
       alert("Please select a video first");
       return;
     }
 
-    setIsSubmitting(true); // Set submitting state to true
+    setIsSubmitting(true);
+    startUpload();
 
     try {
       const formData = {
@@ -73,31 +115,35 @@ const VideoUploadForm = ({
         ...(additionalText && { text: additionalText }),
       };
 
-      if (onFileUpload) {
-        const fakeEvent = { target: { files: [mainVideo] } };
-        onFileUpload(fakeEvent);
-      }
+      // Simulate upload progress
+      await simulateUpload();
 
       if (onSubmit) {
-        await onSubmit(formData); // Wait for onSubmit to complete
+        await onSubmit(formData);
       }
+      
+      completeUpload(mainVideo);
     } catch (error) {
       console.error("Submission error:", error);
+      failUpload(error.message);
     } finally {
-      setIsSubmitting(false); // Reset submitting state regardless of outcome
+      setIsSubmitting(false);
     }
   };
 
   const handleResetForm = () => {
-    if (imagePreviewUrl) {
+    if (imagePreviewUrl && imagePreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(imagePreviewUrl);
     }
+    
     setMainVideo(null);
     setAdditionalImage(null);
     setAdditionalText("");
     setImagePreviewUrl(null);
     setActiveTab("video");
-    setIsSubmitting(false); // Reset submitting state
+    setIsSubmitting(false);
+    
+    clearUploadData();
 
     const videoInput = document.getElementById("video-upload");
     const imageInput = document.getElementById("image-upload");
@@ -106,7 +152,7 @@ const VideoUploadForm = ({
   };
 
   const isSubmitDisabled = () => {
-    return !mainVideo || isUploading || isSubmitting; // Disable if uploading or submitting
+    return !mainVideo || isUploading || isSubmitting;
   };
 
   const renderVideoSection = () => (
@@ -137,7 +183,7 @@ const VideoUploadForm = ({
             onClick={handleRemoveVideo}
             className="p-1 hover:bg-gray-600 rounded-full transition-colors"
             type="button"
-            disabled={isSubmitting} // Disable remove during submission
+            disabled={isSubmitting || isUploading}
           >
             <X className="h-4 w-4 text-gray-400" />
           </button>
@@ -165,12 +211,12 @@ const VideoUploadForm = ({
       <div className="flex space-x-2 mb-4">
         <button
           onClick={() => setActiveTab("image")}
-          disabled={isSubmitting} // Disable tabs during submission
+          disabled={isSubmitting || isUploading}
           className={`flex-1 flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-all ${
             activeTab === "image"
               ? "bg-green-600 text-white"
               : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-          } ${isSubmitting ? "opacity-50 cursor-not-allowed" : ""}`}
+          } ${isSubmitting || isUploading ? "opacity-50 cursor-not-allowed" : ""}`}
           type="button"
         >
           <Image className="h-4 w-4" />
@@ -179,12 +225,12 @@ const VideoUploadForm = ({
 
         <button
           onClick={() => setActiveTab("text")}
-          disabled={isSubmitting} // Disable tabs during submission
+          disabled={isSubmitting || isUploading}
           className={`flex-1 flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-all ${
             activeTab === "text"
               ? "bg-green-600 text-white"
               : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-          } ${isSubmitting ? "opacity-50 cursor-not-allowed" : ""}`}
+          } ${isSubmitting || isUploading ? "opacity-50 cursor-not-allowed" : ""}`}
           type="button"
         >
           <FileText className="h-4 w-4" />
@@ -202,11 +248,11 @@ const VideoUploadForm = ({
                 onChange={handleImageSelect}
                 className="hidden"
                 id="image-upload"
-                disabled={isSubmitting} // Disable file input during submission
+                disabled={isSubmitting || isUploading}
               />
               <label 
                 htmlFor="image-upload" 
-                className={`cursor-pointer ${isSubmitting ? "opacity-50" : ""}`}
+                className={`cursor-pointer ${isSubmitting || isUploading ? "opacity-50" : ""}`}
               >
                 <Image className="h-12 w-12 text-gray-500 mx-auto mb-2" />
                 <p className="text-gray-300 text-sm">Click to upload image</p>
@@ -223,7 +269,7 @@ const VideoUploadForm = ({
                   onClick={handleRemoveImage}
                   className="p-1 hover:bg-gray-600 rounded-full transition-colors"
                   type="button"
-                  disabled={isSubmitting} // Disable remove during submission
+                  disabled={isSubmitting || isUploading}
                 >
                   <X className="h-4 w-4 text-gray-400" />
                 </button>
@@ -258,7 +304,7 @@ const VideoUploadForm = ({
               placeholder="Enter additional text here... (You can type multiple characters)"
               className="w-full h-32 px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-green-500 resize-none"
               autoFocus
-              disabled={isSubmitting} // Disable textarea during submission
+              disabled={isSubmitting || isUploading}
             />
             <div className="flex justify-between items-center mt-2">
               <span className="text-xs text-gray-400">
@@ -268,7 +314,7 @@ const VideoUploadForm = ({
                 <button
                   onClick={handleRemoveText}
                   className="text-xs text-red-400 hover:text-red-300"
-                  disabled={isSubmitting} // Disable clear during submission
+                  disabled={isSubmitting || isUploading}
                 >
                   Clear
                 </button>
@@ -340,7 +386,7 @@ const VideoUploadForm = ({
               ) : isUploading ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
-                  <span>Uploading...</span>
+                  <span>Uploading... {uploadProgress}%</span>
                 </>
               ) : (
                 <>
@@ -356,7 +402,7 @@ const VideoUploadForm = ({
               onClick={handleResetForm}
               className="w-full mt-2 py-2 text-gray-400 hover:text-white transition-colors text-sm"
               type="button"
-              disabled={isSubmitting} // Disable reset during submission
+              disabled={isSubmitting || isUploading}
             >
               Reset Form
             </button>
