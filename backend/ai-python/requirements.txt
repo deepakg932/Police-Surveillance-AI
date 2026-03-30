@@ -2,11 +2,13 @@ fastapi
 uvicorn
 ultralytics
 opencv-python-headless
-numpy
+numpy==1.26.4
 pillow
 easyocr
 requests
 python-multipart
 python-dotenv
-google-generativeai
 deepface
+tf-keras
+tensorflow==2.19.0
+retina-face
