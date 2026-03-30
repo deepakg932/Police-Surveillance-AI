@@ -10,19 +10,112 @@ import re
 from difflib import SequenceMatcher
 from torchvision import models, transforms
 from PIL import Image
-from deepface import DeepFace
 from fastapi.staticfiles import StaticFiles
+
+SAVE_DIR       = "detected_frames"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 app = FastAPI()
 
-app.mount("/files", StaticFiles(directory="detected_frames"), name="files")
+app.mount("/files", StaticFiles(directory=SAVE_DIR), name="files")
+
+
+# --------------------------------
+# LAZY GLOBALS
+# --------------------------------
+DeepFace = None
+DEEPFACE_AVAILABLE = False
+
+car_model = None
+plate_model = None
+world_model = None
+reader = None
+resnet = None
+
+# --------------------------------
+# DEVICE
+# --------------------------------
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print("Running on:", device)
+
+# --------------------------------
+# HEALTH ROUTES
+# --------------------------------
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+# --------------------------------
+# LAZY LOADERS
+# --------------------------------
+def get_deepface():
+    global DeepFace, DEEPFACE_AVAILABLE
+    if DeepFace is None:
+        try:
+            from deepface import DeepFace as DF
+            DeepFace = DF
+            DEEPFACE_AVAILABLE = True
+            print("✅ DeepFace loaded successfully")
+        except Exception as e:
+            DEEPFACE_AVAILABLE = False
+            print(f"❌ DeepFace load failed: {e}")
+            return None
+    return DeepFace
+
+
+def get_car_model():
+    global car_model
+    if car_model is None:
+        print("Loading car_model...")
+        car_model = YOLO("yolov8n.pt").to(device)
+    return car_model
+
+
+def get_plate_model():
+    global plate_model
+    if plate_model is None:
+        print("Loading plate_model...")
+        plate_model = YOLO("license_plate_detector.pt").to(device)
+    return plate_model
+
+
+def get_world_model():
+    global world_model
+    if world_model is None:
+        print("Loading world_model...")
+        world_model = YOLOWorld("yolov8s-worldv2.pt").to(device)
+    return world_model
+
+
+def get_reader():
+    global reader
+    if reader is None:
+        print("Loading easyocr reader...")
+        reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+    return reader
+
+
+def get_resnet():
+    global resnet
+    if resnet is None:
+        print("Loading resnet...")
+        model = models.resnet50(pretrained=True)
+        model = torch.nn.Sequential(*list(model.children())[:-1])
+        model.eval()
+        resnet = model
+    return resnet
+
 
 # --------------------------------
 # DEVICE
 # --------------------------------
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print("Running on:", device)
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+# print("Running on:", device)
 
 # --------------------------------
 # MODELS
@@ -32,25 +125,24 @@ print("Running on:", device)
 
 
 
-car_model   = YOLO("yolov8n.pt").to(device)
-plate_model = YOLO("license_plate_detector.pt").to(device)
-world_model = YOLOWorld("yolov8s-worldv2.pt").to(device)
-reader      = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+# car_model   = YOLO("yolov8n.pt").to(device)
+# plate_model = YOLO("license_plate_detector.pt").to(device)
+# world_model = YOLOWorld("yolov8s-worldv2.pt").to(device)
+# reader      = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
 
 # --------------------------------
 # FEATURE EXTRACTOR
 # --------------------------------
 
-resnet = models.resnet50(pretrained=True)
-resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
-resnet.eval()
+# resnet = models.resnet50(pretrained=True)
+# resnet = torch.nn.Sequential(*list(resnet.children())[:-1])
+# resnet.eval()
 
 # --------------------------------
 # CONFIG
 # --------------------------------
 
-SAVE_DIR       = "detected_frames"
-os.makedirs(SAVE_DIR, exist_ok=True)
+
 
 FRAME_SKIP     = 1      # check more frames for plates
 AREA_THRESHOLD = 1000
@@ -400,6 +492,9 @@ def perform_ocr_plate(frame, box):
     Try multiple enhancement versions and return best OCR result.
     Joins multi-part OCR results (e.g. "MP 04" + "ZP" + "7785").
     """
+    
+    ocr_reader = get_reader()
+    
     x1, y1, x2, y2 = map(int, box)
     # Add padding around plate
     pad = 8
@@ -417,7 +512,7 @@ def perform_ocr_plate(frame, box):
 
     for enhanced in enhanced_versions:
         # Try full join (all OCR parts concatenated)
-        results = reader.readtext(
+        results = ocr_reader.readtext(
             enhanced, detail=0,
             allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
         )
@@ -518,10 +613,11 @@ WEAPON_ATTRS = {"weapon", "gun", "knife"}
 # ================================
 
 def extract_features(img):
+    model = get_resnet()
     img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     img = transform(img).unsqueeze(0)
     with torch.no_grad():
-        return resnet(img).flatten().numpy()
+        return model(img).flatten().numpy()
 
 
 def is_blurry(img):
@@ -777,6 +873,9 @@ def parse_prompt(prompt: str):
 
 def run_person_clothing_color_mode(cap, clothing_type, color_name, results_list):
     """👕 Detect: Person wearing [COLOR] shirt/tshirt/jacket"""
+
+    world = get_world_model()
+
     tracker = CooldownTracker()
     frame_id = 0
 
@@ -789,8 +888,8 @@ def run_person_clothing_color_mode(cap, clothing_type, color_name, results_list)
         if frame_id % FRAME_SKIP != 0: continue
 
         # Detect person
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.40, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.40, imgsz=640)
         if res_p[0].boxes is None:
             continue
 
@@ -851,6 +950,8 @@ def run_text_search_mode(cap, target_text, results_list):
     tracker  = CooldownTracker()
     frame_id = 0
 
+    ocr_reader = get_reader()
+
     print(f"Searching text: {target_text}")
 
     while cap.isOpened():
@@ -863,7 +964,7 @@ def run_text_search_mode(cap, target_text, results_list):
             continue
 
         # OCR on full frame
-        results = reader.readtext(frame, detail=1)
+        results = ocr_reader.readtext(frame, detail=1)
 
         for (bbox, text, conf) in results:
             clean = re.sub(r'[^A-Z0-9]', '', text.upper())
@@ -907,6 +1008,9 @@ def run_text_search_mode(cap, target_text, results_list):
 
 
 def run_person_bag_color_mode(cap, color_name, bag_type, results_list):
+
+    world = get_world_model()
+
     tracker  = CooldownTracker()
     frame_id = 0
 
@@ -922,12 +1026,12 @@ def run_person_bag_color_mode(cap, color_name, bag_type, results_list):
             continue
 
         # person detect
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.40, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.40, imgsz=640)
 
         # bag detect
-        world_model.set_classes([bag_type])
-        res_b = world_model(frame, conf=0.35, imgsz=640)
+        world.set_classes([bag_type])
+        res_b = world(frame, conf=0.35, imgsz=640)
 
         if res_p[0].boxes is None or res_b[0].boxes is None:
             continue
@@ -986,12 +1090,15 @@ def run_person_bag_color_mode(cap, color_name, bag_type, results_list):
 
 
 def run_gender_color_mode(cap, gender_target, color_name, results_list):
+
+    world = get_world_model()
+
     tracker  = CooldownTracker()
     frame_id = 0
 
     print(f"Searching: {gender_target} wearing {color_name}")
 
-    world_model.set_classes(["person"])
+    world.set_classes(["person"])
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -1002,7 +1109,7 @@ def run_gender_color_mode(cap, gender_target, color_name, results_list):
         if frame_id % FRAME_SKIP != 0:
             continue
 
-        res = world_model(frame, conf=0.40, imgsz=640)
+        res = world(frame, conf=0.40, imgsz=640)
         if res[0].boxes is None:
             continue
 
@@ -1024,17 +1131,23 @@ def run_gender_color_mode(cap, gender_target, color_name, results_list):
             face_crop = None
 
             try:
-                faces = DeepFace.extract_faces(
-                    crop,
-                    enforce_detection=False
-                )
+                df = get_deepface()
+                if df is None:
+                    face_found = False
 
-                if faces and len(faces) > 0:
-                    face_img = faces[0]["face"]
-                    face_crop = (face_img * 255).astype("uint8")
-                    face_found = True
+                else:
+                    faces = df.extract_faces(
+                        crop,
+                        enforce_detection=False
+                    )
 
-            except:
+                    if faces and len(faces) > 0:
+                        face_img = faces[0]["face"]
+                        face_crop = (face_img * 255).astype("uint8")
+                        face_found = True
+
+            except Exception as e:
+                print(f"DeepFace extract_faces error: {e}")
                 face_found = False
 
             # ❌ agar face nahi mila → skip
@@ -1085,6 +1198,9 @@ def run_gender_color_mode(cap, gender_target, color_name, results_list):
                 "timestamp": frame_id
             })
 def run_person_helmet_color_mode(cap, color_name, results_list):
+
+    world = get_world_model()
+
     tracker  = CooldownTracker()
     frame_id = 0
 
@@ -1097,14 +1213,14 @@ def run_person_helmet_color_mode(cap, color_name, results_list):
         if frame_id % FRAME_SKIP != 0: continue
 
         # Detect persons
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.40, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.40, imgsz=640)
         if res_p[0].boxes is None:
             continue
 
         # Detect helmets
-        world_model.set_classes(["helmet"])
-        res_h = world_model(frame, conf=0.35, imgsz=640)
+        world.set_classes(["helmet"])
+        res_h = world(frame, conf=0.35, imgsz=640)
         if res_h[0].boxes is None:
             continue
 
@@ -1161,6 +1277,9 @@ def run_person_helmet_color_mode(cap, color_name, results_list):
 
 
 def run_person_helmet_any_mode(cap,prompt, results_list):
+
+    world = get_world_model()
+
     """🪖 Detect: Any person with helmet (any color)"""
     tracker = CooldownTracker()
     frame_id = 0
@@ -1176,14 +1295,14 @@ def run_person_helmet_any_mode(cap,prompt, results_list):
             continue
 
         # Detect persons
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.40, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.40, imgsz=640)
         if res_p[0].boxes is None:
             continue
 
         # Detect helmets (ANY color)
-        world_model.set_classes(["helmet"])
-        res_h = world_model(frame, conf=0.35, imgsz=640)
+        world.set_classes(["helmet"])
+        res_h = world(frame, conf=0.35, imgsz=640)
         if res_h[0].boxes is None:
             continue
 
@@ -1238,16 +1357,20 @@ def run_person_helmet_any_mode(cap,prompt, results_list):
 
 def detect_vehicles_in_frame(frame, vehicle_info,
                               conf_yolo=0.4, conf_world=0.35):
+    
+    car = get_car_model()
+    world = get_world_model()
+
     boxes = []
     if vehicle_info["strategy"] == "yolo_class":
-        res = car_model(frame, classes=vehicle_info["class_ids"],
+        res = car(frame, classes=vehicle_info["class_ids"],
                         conf=conf_yolo)
         if res[0].boxes is not None:
             for b in res[0].boxes.xyxy.cpu().numpy():
                 boxes.append(list(map(int, b)))
     else:
-        world_model.set_classes([vehicle_info["world_label"]])
-        res = world_model(frame, conf=conf_world, imgsz=640)
+        world.set_classes([vehicle_info["world_label"]])
+        res = world(frame, conf=conf_world, imgsz=640)
         if res[0].boxes is not None:
             for b in res[0].boxes.xyxy.cpu().numpy():
                 boxes.append(list(map(int, b)))
@@ -1302,6 +1425,10 @@ def attr_belongs_to_person(p_box, a_box, attr_name):
 # ---- 1. LICENSE PLATE — DIRECT FRAME SCAN (KEY FIX) ----
 
 def run_plate_mode(cap, plate_info, results_list):
+
+    plate_detector = get_plate_model()
+    car = get_car_model()
+
     """
     STRATEGY — 3 parallel pipelines, all run every frame:
 
@@ -1340,7 +1467,7 @@ def run_plate_mode(cap, plate_info, results_list):
         # PIPELINE A: Direct full-frame plate scan
         # Lowest conf (0.15) to catch everything
         # =====================================================
-        direct_results = plate_model(frame, conf=0.15, imgsz=1280)
+        direct_results = plate_detector(frame, conf=0.15, imgsz=1280)
         if direct_results[0].boxes is not None:
             for pbox in direct_results[0].boxes.xyxy.cpu().numpy():
                 px1,py1,px2,py2 = map(int, pbox)
@@ -1351,7 +1478,7 @@ def run_plate_mode(cap, plate_info, results_list):
         # =====================================================
         # PIPELINE B: Vehicle-guided (car → plate)
         # =====================================================
-        car_results = car_model(frame, classes=[2,3,5,7], conf=0.30)
+        car_results = car(frame, classes=[2,3,5,7], conf=0.30)
         if car_results[0].boxes is not None:
             for cbox in car_results[0].boxes.xyxy.cpu().numpy():
                 cx1,cy1,cx2,cy2 = map(int, cbox)
@@ -1359,7 +1486,7 @@ def run_plate_mode(cap, plate_info, results_list):
                 if car_crop.size == 0:
                     continue
 
-                plate_in_car = plate_model(car_crop, conf=0.15)
+                plate_in_car = plate_detector(car_crop, conf=0.15)
                 if plate_in_car[0].boxes is None:
                     continue
 
@@ -1381,7 +1508,7 @@ def run_plate_mode(cap, plate_info, results_list):
         if w <= 1280:  # only upscale if not already large
             upscaled = cv2.resize(frame, (w*2, h*2),
                                   interpolation=cv2.INTER_LINEAR)
-            up_results = plate_model(upscaled, conf=0.20, imgsz=1280)
+            up_results = plate_detector(upscaled, conf=0.20, imgsz=1280)
             if up_results[0].boxes is not None:
                 for pbox in up_results[0].boxes.xyxy.cpu().numpy():
                     # Scale coords back to original
@@ -1487,6 +1614,9 @@ def run_color_object_mode(cap, color_name, vehicle_word,
 # ---- 3. PERSON + ATTRIBUTE ----
 
 def run_person_attribute_mode(cap, attributes, results_list):
+
+    world = get_world_model()
+    
     tracker  = CooldownTracker()
     frame_id = 0
 
@@ -1496,11 +1626,11 @@ def run_person_attribute_mode(cap, attributes, results_list):
         frame_id += 1
         if frame_id % FRAME_SKIP != 0: continue
 
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.40, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.40, imgsz=640)
 
-        world_model.set_classes(attributes)
-        res_a = world_model(frame, conf=0.35, imgsz=640)
+        world.set_classes(attributes)
+        res_a = world(frame, conf=0.35, imgsz=640)
 
         if (res_p[0].boxes is None or len(res_p[0].boxes) == 0 or
                 res_a[0].boxes is None or len(res_a[0].boxes) == 0):
@@ -1547,6 +1677,9 @@ def run_person_attribute_mode(cap, attributes, results_list):
 # ---- 3.5 NEW: PERSON + ATTRIBUTE + COLOR ----
 
 def run_person_attribute_color_mode(cap, attribute, color_name, results_list):
+
+    world = get_world_model()
+
     """🎯 Detect: Person with ATTRIBUTE + wearing COLOR"""
     tracker  = CooldownTracker()
     frame_id = 0
@@ -1560,14 +1693,14 @@ def run_person_attribute_color_mode(cap, attribute, color_name, results_list):
         if frame_id % FRAME_SKIP != 0: continue
 
         # Detect person
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.40, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.40, imgsz=640)
         if res_p[0].boxes is None or len(res_p[0].boxes) == 0:
             continue
 
         # Detect attribute
-        world_model.set_classes([attribute])
-        res_a = world_model(frame, conf=0.35, imgsz=640)
+        world.set_classes([attribute])
+        res_a = world(frame, conf=0.35, imgsz=640)
         if res_a[0].boxes is None or len(res_a[0].boxes) == 0:
             continue
 
@@ -1619,14 +1752,17 @@ def run_person_attribute_color_mode(cap, attribute, color_name, results_list):
             })
 
 def predict_gender_deepface(crop):
+    df = get_deepface()
+    if df is None:
+        return "unknown"
+
     try:
-        result = DeepFace.analyze(
+        result = df.analyze(
             crop,
             actions=['gender'],
             enforce_detection=False
         )
-       
-        # DeepFace kabhi list return karta hai
+
         if isinstance(result, list):
             result = result[0]
 
@@ -1636,12 +1772,11 @@ def predict_gender_deepface(crop):
             return "male"
         elif gender in ["woman", "female"]:
             return "female"
-       
-
 
         return "unknown"
 
     except Exception as e:
+        print(f"DeepFace analyze error: {e}")
         return "unknown"
 
 
@@ -1651,6 +1786,8 @@ def run_person_vehicle_color_mode(cap, vehicle_word, vehicle_info, color_name, r
     """🎯 Detect: Person with VEHICLE + wearing COLOR"""
     tracker  = CooldownTracker()
     frame_id = 0
+
+    world = get_world_model()
    
     print(f"  Searching: person on {vehicle_word} wearing {color_name}")
 
@@ -1661,8 +1798,8 @@ def run_person_vehicle_color_mode(cap, vehicle_word, vehicle_info, color_name, r
         if frame_id % FRAME_SKIP != 0: continue
 
         # Detect person
-        world_model.set_classes(["person"])
-        res_p = world_model(frame, conf=0.35, imgsz=640)
+        world.set_classes(["person"])
+        res_p = world(frame, conf=0.35, imgsz=640)
         if res_p[0].boxes is None or len(res_p[0].boxes) == 0:
             continue
 
@@ -1731,9 +1868,12 @@ def run_person_vehicle_color_mode(cap, vehicle_word, vehicle_info, color_name, r
 # ---- 4. PERSON WEARING COLOR CLOTHES ----
 
 def run_color_attribute_mode(cap, object_class, color_name, results_list):
+
+    world = get_world_model()
+
     tracker  = CooldownTracker()
     frame_id = 0
-    world_model.set_classes([object_class])
+    world.set_classes([object_class])
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -1741,7 +1881,7 @@ def run_color_attribute_mode(cap, object_class, color_name, results_list):
         frame_id += 1
         if frame_id % FRAME_SKIP != 0: continue
 
-        res = world_model(frame, conf=0.35, imgsz=640)
+        res = world(frame, conf=0.35, imgsz=640)
         if not res[0].boxes: continue
 
         for box in res[0].boxes.xyxy.cpu().numpy():
@@ -1778,9 +1918,11 @@ def run_color_attribute_mode(cap, object_class, color_name, results_list):
 # ---- 5. PERSON + VEHICLE PROXIMITY ----
 
 def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
+    world = get_world_model()
+    
     tracker  = CooldownTracker()
     frame_id = 0
-    world_model.set_classes(["person"])
+    world.set_classes(["person"])
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -1788,7 +1930,7 @@ def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
         frame_id += 1
         if frame_id % FRAME_SKIP != 0: continue
 
-        pr = world_model(frame, conf=0.35, imgsz=640)
+        pr = world(frame, conf=0.35, imgsz=640)
         if not pr[0].boxes: continue
 
         p_boxes = pr[0].boxes.xyxy.cpu().numpy()
@@ -1840,10 +1982,12 @@ def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
 # ---- 6. GENERIC YOLOWorld FALLBACK ----
 
 def run_yoloworld_mode(cap, prompt, ref_feat, results_list):
+    world = get_world_model()
+
     tracker  = CooldownTracker()
     frame_id = 0
     prompts  = [p.strip().lower() for p in prompt.split(",")]
-    world_model.set_classes(prompts)
+    world.set_classes(prompts)
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -1851,7 +1995,7 @@ def run_yoloworld_mode(cap, prompt, ref_feat, results_list):
         frame_id += 1
         if frame_id % FRAME_SKIP != 0: continue
 
-        res = world_model(frame, conf=0.35, imgsz=640)
+        res = world(frame, conf=0.35, imgsz=640)
         if not res[0].boxes: continue
 
         boxes = res[0].boxes.xyxy.cpu().numpy()
