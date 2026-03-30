@@ -18,6 +18,13 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools wheel
+
+RUN python -c "import numpy; print('NumPy version:', numpy.__version__)"
+
+# pehle numpy force karo
+RUN pip install --no-cache-dir numpy==1.26.4
+
+# phir बाकी packages install karo
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
