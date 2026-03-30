@@ -8,7 +8,8 @@ easyocr
 requests
 python-multipart
 python-dotenv
-deepface
-tf-keras
-tensorflow==2.19.0
-retina-face
+
+deepface==0.0.93
+retina-face==0.0.17
+tensorflow==2.15.1
+keras==2.15.0
