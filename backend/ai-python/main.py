@@ -192,11 +192,11 @@ COLOR_THRESHOLDS = {
 def get_vehicle_body_crop(frame, box, padding_ratio=0.05):
     """
     Extract the vehicle body region, stripping road, sky and background.
-    
+   
     Strategy:
     - Horizontal: use center 80% (strip door-frame edges that may be background)
     - Vertical: use 15%–80% of height (strip roof antenna / road shadow)
-    - Extra: reject if crop mean brightness is too close to pure white (sky) 
+    - Extra: reject if crop mean brightness is too close to pure white (sky)
       or pure black (shadow on road)
     """
     x1, y1, x2, y2 = map(int, box)
@@ -228,9 +228,9 @@ def get_vehicle_body_crop(frame, box, padding_ratio=0.05):
 def vehicle_color_match(frame, box, color_name):
     """
     Multi-zone color validation for vehicles.
-    
+   
     Returns (matched: bool, confidence: float, details: dict)
-    
+   
     Requires at least 2 of 3 zones to exceed threshold.
     Also applies confusion-pair exclusion.
     """
@@ -962,6 +962,14 @@ VEHICLE_ALIASES = {
     "truck":         {"strategy": "yolo_class", "class_ids": [7]},
     "trucks":        {"strategy": "yolo_class", "class_ids": [7]},
     "lorry":         {"strategy": "yolo_class", "class_ids": [7]},
+
+    # Tractor / farm tractor (open-vocabulary; YOLO class may not exist)
+    "tractor":       {"strategy": "world", "world_label": "tractor"},
+    "tractors":      {"strategy": "world", "world_label": "tractor"},
+    "farm tractor":  {"strategy": "world", "world_label": "tractor"},
+    "tractor truck": {"strategy": "world", "world_label": "tractor"},
+    "tracter":       {"strategy": "world", "world_label": "tractor"},
+    "tracter":       {"strategy": "world", "world_label": "tractor"},
    
     # Buses (YOLO class 5)
     "bus":           {"strategy": "yolo_class", "class_ids": [5]},
@@ -991,6 +999,11 @@ VEHICLE_ALIASES = {
     "tempo":         {"strategy": "world", "world_label": "auto rickshaw"},
     "e-rickshaw":    {"strategy": "world", "world_label": "auto rickshaw"},
     "electric rickshaw": {"strategy": "world", "world_label": "auto rickshaw"},
+    "three wheeler": {"strategy": "world", "world_label": "auto rickshaw"},
+    "3 wheeler": {"strategy": "world", "world_label": "auto rickshaw"},
+    "three wheelr": {"strategy": "world", "world_label": "auto rickshaw"},
+    "3-wheeler": {"strategy": "world", "world_label": "auto rickshaw"},
+    "three-wheeler": {"strategy": "world", "world_label": "auto rickshaw"},
    
     # Other vehicles
     "ambulance":     {"strategy": "world", "world_label": "ambulance"},
@@ -1529,10 +1542,21 @@ def parse_prompt(prompt: str):
     # run a sensible default detector set instead of mis-parsing.
     if not p:
         return {"mode": "auto", "prompt": prompt}
-    if p in {"auto", "auto detect", "autodetect", "detect"}:
+    # "auto" ambiguity fix:
+    # - "auto" can mean autodetect mode OR vehicle(auto rickshaw).
+    # - If prompt clearly mentions vehicle context, do NOT switch to auto mode.
+    vehicle_context_tokens = [
+        "rickshaw", "e-rickshaw", "electric rickshaw",
+        "three wheeler", "3 wheeler", "three wheelr", "tuk tuk", "tempo"
+    ]
+    is_vehicle_context = any(tok in p for tok in vehicle_context_tokens)
+    if p in {"auto", "auto detect", "autodetect", "detect"} and not is_vehicle_context:
         return {"mode": "auto", "prompt": prompt}
     p = re.sub(r'\bauto\s*rickshaw\b', 'auto rickshaw', p)
     p = re.sub(r'\btuk[\s-]?tuk\b', 'tuk tuk', p)
+    p = re.sub(r'\bthree\s*wheelr\b', 'three wheeler', p)
+    p = re.sub(r'\b3\s*-\s*wheeler\b', '3 wheeler', p)
+    p = re.sub(r'\bthree\s*-\s*wheeler\b', 'three wheeler', p)
     # Common typo normalization for clothing prompts
     p = re.sub(r'\bsaree+\b', 'saree', p)
     p = re.sub(r'\bsare\b', 'saree', p)
@@ -3114,7 +3138,7 @@ def run_person_without_helmet_mode(cap, results_list):
         # This avoids auto/e-rickshaw/car confusion from open-vocabulary labels.
         # ═════════════════════════════════════════════════════════════
         v_boxes = []
-        
+       
         # ── Method A: YOLO class 3 (motorcycle) ──
         yolo_res = car_model(frame, classes=[3], conf=0.40)
         if yolo_res[0].boxes is not None:
@@ -3175,22 +3199,22 @@ def run_person_without_helmet_mode(cap, results_list):
             # ─── CHECK 1: HELMET ───
             has_helmet = False
             helmet_overlap = 0
-            
+           
             if len(h_boxes) > 0:
                 for hbox in h_boxes:
                     hx1, hy1, hx2, hy2 = map(int, hbox)
                     iou_val = iou(pbox, [hx1, hy1, hx2, hy2])
                     helmet_overlap = max(helmet_overlap, iou_val)
-                    
+                   
                     # Helmet must be on head (top 30% of person)
                     head_region = [px1, py1, px2, py1 + int(ph * 0.30)]
                     iou_head = iou(head_region, [hx1, hy1, hx2, hy2])
-                    
+                   
                     if iou_head > 0.08 or iou_val > 0.15:  # ✅ RELAXED thresholds
                         has_helmet = True
                         print(f"  [Frame {frame_id}] HELMET DETECTED! overlap={iou_val:.3f}")
                         break
-            
+           
             if has_helmet:
                 print(f"  [Frame {frame_id}] Person HAS helmet - SKIPPING")
                 continue
@@ -3217,11 +3241,11 @@ def run_person_without_helmet_mode(cap, results_list):
             # ═════════════════════════════════════════════════════════════
             label = "🚨 NO HELMET! (Two-Wheeler)"
             key = f"no_helmet_{px1//50}_{py1//50}"
-            
+           
             if tracker.should_skip(key, frame_id):
                 print(f"  [Frame {frame_id}] Skipped (cooldown)")
                 continue
-            
+           
             tracker.update(key, frame_id)
 
             ann = frame.copy()
@@ -3252,7 +3276,7 @@ def run_person_without_helmet_mode(cap, results_list):
 # ═════════════════════════════════════════════════════════════════════
 # THRESHOLD CHANGES SUMMARY:
 # ═════════════════════════════════════════════════════════════════════
-# 
+#
 # Person detection:      0.45 → 0.35  (catches more people)
 # Helmet detection:      0.20 → 0.35  (reduces false positives)  
 # YOLO two-wheeler:      0.45 → 0.35  (catches more bikes)
@@ -3796,6 +3820,7 @@ def run_person_helmet_any_mode(cap, prompt, results_list):
 
 def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.38):
     boxes = []
+    neg_boxes = []
 
     if vehicle_info["strategy"] == "yolo_class":
         res = car_model(frame, classes=vehicle_info["class_ids"], conf=conf_yolo)
@@ -3809,11 +3834,108 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                 if w * h < 800:
                     continue
                 boxes.append([x1, y1, x2, y2])
+
+        # Negative comparator: if querying truck (YOLO class 7), reject boxes overlapping tractor.
+        if set(vehicle_info.get("class_ids", [])) == {7}:
+            try:
+                world_model.set_classes(["tractor"])
+                # Lower conf to improve tractor recall (so trucks don't absorb tractors).
+                t_res = world_model(frame, conf=0.25, imgsz=640)
+                if t_res[0].boxes is not None:
+                    for tb in t_res[0].boxes.xyxy.cpu().numpy():
+                        x1, y1, x2, y2 = map(int, tb)
+                        area = (x2 - x1) * (y2 - y1)
+                        if area < 1200:
+                            continue
+                        neg_boxes.append([x1, y1, x2, y2])
+            except Exception:
+                neg_boxes = []
+
+            # Stronger per-box check (reduces case where YOLO class-7 fires on tractors):
+            # For each YOLO "truck" box, run world-model tractor detection on the crop.
+            # If tractor is detected confidently within the crop, reject the box.
+            try:
+                filtered_boxes = []
+                wl_target = "tractor"
+                world_model.set_classes([wl_target])
+                for (x1, y1, x2, y2) in boxes:
+                    crop = frame[y1:y2, x1:x2]
+                    if crop is None or crop.size == 0:
+                        filtered_boxes.append([x1, y1, x2, y2])
+                        continue
+                    tres = world_model(crop, conf=0.20, imgsz=640)
+                    if tres[0].boxes is None:
+                        filtered_boxes.append([x1, y1, x2, y2])
+                        continue
+
+                    rejected = False
+                    crop_area = max(1, (x2 - x1) * (y2 - y1))
+                    for tb, cls_id, conf_val in zip(
+                        tres[0].boxes.xyxy.cpu().numpy(),
+                        tres[0].boxes.cls.cpu().numpy(),
+                        tres[0].boxes.conf.cpu().numpy(),
+                    ):
+                        pred_label = world_model.names[int(cls_id)].lower()
+                        # YOLOWorld may return "tractor", "farm tractor", etc.
+                        # So use substring match instead of exact equality.
+                        if wl_target not in pred_label:
+                            continue
+                        px1, py1, px2, py2 = map(int, tb)
+                        p_area = max(0, (px2 - px1) * (py2 - py1))
+                        rel = p_area / crop_area
+                        # Require tractor to occupy meaningful portion of crop.
+                        # Use stricter rejection for "truck" prompt.
+                        if conf_val >= 0.15 and rel >= 0.12:
+                            rejected = True
+                            break
+
+                    if not rejected:
+                        filtered_boxes.append([x1, y1, x2, y2])
+
+                boxes = filtered_boxes
+            except Exception:
+                # If this check fails, keep original boxes (better than returning nothing).
+                pass
     else:
         world_model.set_classes([vehicle_info["world_label"]])
         wl = vehicle_info["world_label"].lower()
         if wl in ("scooter", "moped"):
             conf_world = 0.28
+        if wl == "auto rickshaw":
+            conf_world = max(conf_world, 0.42)
+
+        # Negative comparator: if querying tractor, reject overlaps with YOLO truck boxes.
+        if wl == "tractor":
+            try:
+                truck_res = car_model(frame, classes=[7], conf=0.35)
+                if truck_res[0].boxes is not None:
+                    for tb in truck_res[0].boxes.xyxy.cpu().numpy():
+                        neg_boxes.append(list(map(int, tb)))
+            except Exception:
+                neg_boxes = []
+
+        # For auto-rickshaw queries, keep a bike detector as negative comparator.
+        # This prevents bike/scooter boxes being accepted as auto-rickshaw.
+        bike_boxes = []
+        neg_two_wheeler_boxes = []
+        if wl == "auto rickshaw":
+            try:
+                bike_res = car_model(frame, classes=[3], conf=0.35)  # class-3: motorcycle
+                if bike_res[0].boxes is not None:
+                    for bb in bike_res[0].boxes.xyxy.cpu().numpy():
+                        bike_boxes.append(list(map(int, bb)))
+            except Exception:
+                bike_boxes = []
+            # Open-vocab negative comparator for scooters/bikes
+            try:
+                world_model.set_classes(["bike", "motorcycle", "motorbike", "scooter", "moped"])
+                nres = world_model(frame, conf=0.30, imgsz=640)
+                if nres[0].boxes is not None:
+                    for nb in nres[0].boxes.xyxy.cpu().numpy():
+                        neg_two_wheeler_boxes.append(list(map(int, nb)))
+            except Exception:
+                neg_two_wheeler_boxes = []
+
         res = world_model(frame, conf=conf_world, imgsz=640)
         if res[0].boxes is not None:
             for box, cls_id in zip(res[0].boxes.xyxy.cpu().numpy(),
@@ -3822,9 +3944,49 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                 if pred_label != wl:
                     continue
                 x1, y1, x2, y2 = map(int, box)
-                if (x2-x1) * (y2-y1) < 500:
+                w = x2 - x1
+                h = y2 - y1
+                area = w * h
+                if area < 500:
                     continue
+
+                # Auto-rickshaw shape + anti-bike comparison gate
+                if wl == "auto rickshaw":
+                    aspect = w / (h + 1e-5)
+                    # Tight 3-wheeler envelope for better precision.
+                    if aspect < 0.90 or aspect > 2.40:
+                        continue
+                    if area < 2500:
+                        continue
+                    # Reject if this candidate strongly overlaps a motorcycle detection.
+                    if any(iou([x1, y1, x2, y2], mb) > 0.20 for mb in bike_boxes):
+                        continue
+                    # Reject if overlaps any two-wheeler-like world detection.
+                    if any(iou([x1, y1, x2, y2], nb) > 0.20 for nb in neg_two_wheeler_boxes):
+                        continue
+
+                # Tractor anti-comparator: reject if overlaps truck boxes.
+                if wl == "tractor" and neg_boxes:
+                    if any(iou([x1, y1, x2, y2], nb) > 0.25 for nb in neg_boxes):
+                        continue
+
                 boxes.append([x1, y1, x2, y2])
+
+        # Truck negative comparator: if we have tractor neg boxes, reject overlaps.
+        # (YOLO branch sets neg_boxes; this block applies only in world-branch.)
+        if vehicle_info.get("strategy") == "yolo_class" and neg_boxes:
+            # no-op here; truck rejection is handled below after boxes are built.
+            pass
+
+    # If we have tractor negative boxes (truck query), filter built boxes now.
+    if neg_boxes and vehicle_info.get("strategy") == "yolo_class" and set(vehicle_info.get("class_ids", [])) == {7}:
+        filtered = []
+        for b in boxes:
+            # Lower IoU threshold to reject even partial tractor-like overlaps.
+            if any(iou(b, nb) > 0.12 for nb in neg_boxes):
+                continue
+            filtered.append(b)
+        boxes = filtered
 
     # NMS dedup
     unique = []
@@ -4038,7 +4200,7 @@ def run_plate_mode(cap, plate_info, results_list):
 def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_list):
     """
     Accurate color + vehicle detection.
-    
+   
     Improvements over old version:
     1. Multi-zone body sampling (strips road/sky background)
     2. Per-color adaptive thresholds
@@ -4113,6 +4275,30 @@ def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_l
         else:  # YOLOWorld
             world_model.set_classes([vehicle_info["world_label"]])
             conf_world = 0.28 if vehicle_info["world_label"].lower() in ("scooter", "moped") else 0.35
+            wl_target = vehicle_info["world_label"].lower()
+            bike_boxes = []
+            neg_two_wheeler_boxes = []
+            if wl_target == "auto rickshaw":
+                # Negative comparator: bikes should not be accepted as auto-rickshaw.
+                conf_world = max(conf_world, 0.42)
+                try:
+                    bike_res = car_model(frame, classes=[3], conf=0.35)  # motorcycle
+                    if bike_res[0].boxes is not None:
+                        for bb in bike_res[0].boxes.xyxy.cpu().numpy():
+                            bike_boxes.append(list(map(int, bb)))
+                except Exception:
+                    bike_boxes = []
+                try:
+                    world_model.set_classes(["bike", "motorcycle", "motorbike", "scooter", "moped"])
+                    nres = world_model(frame, conf=0.30, imgsz=640)
+                    if nres[0].boxes is not None:
+                        for nb in nres[0].boxes.xyxy.cpu().numpy():
+                            neg_two_wheeler_boxes.append(list(map(int, nb)))
+                except Exception:
+                    neg_two_wheeler_boxes = []
+                # Restore target class before actual detection
+                world_model.set_classes([vehicle_info["world_label"]])
+
             res = world_model(frame, conf=conf_world, imgsz=640)
             if res[0].boxes is not None:
                 for box, cls_id, conf_val in zip(
@@ -4124,8 +4310,26 @@ def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_l
                     if pred_label != vehicle_info["world_label"].lower():
                         continue
                     x1, y1, x2, y2 = map(int, box)
-                    if (x2-x1) * (y2-y1) < 1500:
+                    w = x2 - x1
+                    h = y2 - y1
+                    area = w * h
+                    if area < 1500:
                         continue
+
+                    if wl_target == "auto rickshaw":
+                        # shape sanity for 3-wheelers
+                        aspect = w / (h + 1e-5)
+                        if aspect < 0.90 or aspect > 2.40:
+                            continue
+                        if area < 2500:
+                            continue
+                        # reject if strongly overlaps motorcycle box
+                        if any(iou([x1, y1, x2, y2], mb) > 0.20 for mb in bike_boxes):
+                            continue
+                        # reject if overlaps any two-wheeler-like world detection
+                        if any(iou([x1, y1, x2, y2], nb) > 0.20 for nb in neg_two_wheeler_boxes):
+                            continue
+
                     raw_boxes.append({
                         "box": [x1, y1, x2, y2],
                         "det_conf": float(conf_val),
@@ -4316,7 +4520,7 @@ def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_l
             if color_ok:
                 print(f"    Frame {frame_id}: color={color_name} conf={confidence:.2f} "
                       f"zones_passed={details.get('passed', '?')} area={area}")
-            
+           
             if not confirmed:
                 continue   # waiting for more frame votes
 
@@ -6114,7 +6318,13 @@ async def process_video(req: Request):
             # Force color_object even if mode is wrong
             run_color_object_mode(cap, detected_color, veh_word, veh_info, results_list)
         else:
-            run_yoloworld_mode(cap, prompt, ref_feat, results_list)
+            # If user asked only a vehicle (e-rickshaw / three wheeler etc.), use strict vehicle-only pipeline
+            # to avoid open-vocabulary mislabeling (bike/scooter -> rickshaw).
+            p_lower = str(prompt).lower()
+            if veh_word and veh_info and "person" not in p_lower:
+                run_vehicle_only_mode(cap, veh_word, veh_info, results_list)
+            else:
+                run_yoloworld_mode(cap, prompt, ref_feat, results_list)
 
     cap.release()
 
@@ -6130,4 +6340,64 @@ async def process_video(req: Request):
         "parsed_prompt": parsed,
         "total_found":   len(results_list)
     }
+
+
+def run_vehicle_only_mode(cap, vehicle_word, vehicle_info, results_list):
+    """
+    Strict vehicle-only detection for prompts like `e-rickshaw` / `three wheeler`.
+    Uses detect_vehicles_in_frame() which has negative comparisons
+    to reduce bike/scooter being mislabeled as auto-rickshaw.
+    """
+    tracker = CooldownTracker(cooldown=20)
+    frame_id = 0
+
+    print(f"\n{'='*60}")
+    print(f"  🚗 Vehicle-Only Mode")
+    print(f"  Query: {vehicle_word}")
+    print(f"  Strategy: {vehicle_info.get('strategy')}")
+    print(f"  World label: {vehicle_info.get('world_label', '-')}")
+    print(f"{'='*60}\n")
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_id += 1
+        if frame_id % FRAME_SKIP != 0:
+            continue
+
+        boxes = detect_vehicles_in_frame(
+            frame,
+            vehicle_info,
+            conf_yolo=0.40,
+            conf_world=0.35,
+        )
+        if not boxes:
+            continue
+
+        for (x1, y1, x2, y2) in boxes:
+            key = f"{vehicle_word}_{x1//80}_{y1//80}"
+            if tracker.should_skip(key, frame_id):
+                continue
+            tracker.update(key, frame_id)
+
+            img_path = save_detection(
+                frame,
+                [x1, y1, x2, y2],
+                vehicle_word,
+                frame_id,
+                prefix="veh_only",
+                color=(0, 200, 255),
+            )
+
+            results_list.append({
+                "object": vehicle_word,
+                "confidence": 0.85,
+                "bbox": [x1, y1, x2, y2],
+                "image_path": img_path,
+                "timestamp": frame_id,
+                "source": "vehicle_only",
+            })
+
+    return results_list
 
