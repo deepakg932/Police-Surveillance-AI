@@ -3857,33 +3857,59 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                     continue
                 boxes.append([x1, y1, x2, y2])
     else:
+        def _collect_world_boxes(query_label, conf_val):
+            out = []
+            world_model.set_classes([query_label])
+            res_local = world_model(frame, conf=conf_val, imgsz=640)
+            if res_local[0].boxes is None:
+                return out
+            for box, cls_id, cval in zip(
+                res_local[0].boxes.xyxy.cpu().numpy(),
+                res_local[0].boxes.cls.cpu().numpy(),
+                res_local[0].boxes.conf.cpu().numpy()
+            ):
+                pred_label = world_model.names[int(cls_id)].lower().replace("-", " ").strip()
+                pred_label = re.sub(r"\s+", " ", pred_label)
+                x1, y1, x2, y2 = map(int, box)
+                if (x2 - x1) * (y2 - y1) < 500:
+                    continue
+                out.append({
+                    "box": [x1, y1, x2, y2],
+                    "label": pred_label,
+                    "conf": float(cval)
+                })
+            return out
+
         wl = vehicle_info["world_label"].lower()
         if wl in ("scooter", "moped"):
             conf_world = 0.28
         if wl == "electric rickshaw":
             conf_world = min(conf_world, 0.30)
-        world_queries = [vehicle_info["world_label"]]
-        allowed_labels = {wl}
-        if wl == "electric rickshaw":
-            # Real-world model outputs vary; accept close variants for e-rickshaw intent.
-            world_queries = ["electric rickshaw", "e-rickshaw", "auto rickshaw", "rickshaw"]
-            allowed_labels = {"electric rickshaw", "e rickshaw", "auto rickshaw", "rickshaw"}
+        if wl in ("auto rickshaw", "electric rickshaw"):
+            auto_cands = _collect_world_boxes("auto rickshaw", conf_world)
+            e_cands = _collect_world_boxes("electric rickshaw", conf_world) + _collect_world_boxes("e-rickshaw", conf_world)
 
-        for query_label in world_queries:
-            world_model.set_classes([query_label])
-            res = world_model(frame, conf=conf_world, imgsz=640)
-            if res[0].boxes is None:
-                continue
-            for box, cls_id in zip(res[0].boxes.xyxy.cpu().numpy(),
-                                   res[0].boxes.cls.cpu().numpy()):
-                pred_label = world_model.names[int(cls_id)].lower().replace("-", " ").strip()
-                pred_label = re.sub(r"\s+", " ", pred_label)
-                if pred_label not in allowed_labels:
+            if wl == "auto rickshaw":
+                primary = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
+                opposite = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
+            else:
+                primary = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw", "rickshaw"}]
+                opposite = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
+
+            # Strict split: if candidate overlaps opposite class, reject it.
+            for c in primary:
+                if any(iou(c["box"], o["box"]) > 0.22 for o in opposite):
                     continue
-                x1, y1, x2, y2 = map(int, box)
-                if (x2-x1) * (y2-y1) < 500:
-                    continue
-                boxes.append([x1, y1, x2, y2])
+                boxes.append(c["box"])
+        else:
+            world_queries = [vehicle_info["world_label"]]
+            allowed_labels = {wl}
+            for query_label in world_queries:
+                cands = _collect_world_boxes(query_label, conf_world)
+                for c in cands:
+                    if c["label"] not in allowed_labels:
+                        continue
+                    boxes.append(c["box"])
 
         # Guardrail for e-rickshaw/auto-rickshaw prompts:
         # YOLOWorld can sometimes map bikes as "auto rickshaw" in crowded scenes.
