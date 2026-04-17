@@ -129,7 +129,7 @@ def get_session_id():
         SESSION_ID = str(int(time.time() * 1000))
     return SESSION_ID
 
-FRAME_SKIP     = 5  # check more frames for plates
+FRAME_SKIP     = 1  # check more frames for plates
 AREA_THRESHOLD = 300
 BLUR_THRESHOLD = 15
 COOLDOWN       = 5
@@ -989,21 +989,8 @@ VEHICLE_ALIASES = {
     "tuk tuk":       {"strategy": "world", "world_label": "auto rickshaw"},
     "tuktuk":        {"strategy": "world", "world_label": "auto rickshaw"},
     "tempo":         {"strategy": "world", "world_label": "auto rickshaw"},
-    # Electric rickshaw must stay separate from auto-rickshaw.
-    "e-rickshaw":        {"strategy": "world", "world_label": "electric rickshaw"},
-    "e rickshaw":        {"strategy": "world", "world_label": "electric rickshaw"},
-    "electric rickshaw": {"strategy": "world", "world_label": "electric rickshaw"},
-    "electric-rickshaw": {"strategy": "world", "world_label": "electric rickshaw"},
-    "erickshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
-    # Common Hinglish typos
-    "e-rikshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
-    "e rikshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
-    "e-riksaw":          {"strategy": "world", "world_label": "electric rickshaw"},
-    "e riksaw":          {"strategy": "world", "world_label": "electric rickshaw"},
-    "e-riksw":           {"strategy": "world", "world_label": "electric rickshaw"},
-    "e riksw":           {"strategy": "world", "world_label": "electric rickshaw"},
-    "e-riksahw":         {"strategy": "world", "world_label": "electric rickshaw"},
-    "e riksahw":         {"strategy": "world", "world_label": "electric rickshaw"},
+    "e-rickshaw":    {"strategy": "world", "world_label": "auto rickshaw"},
+    "electric rickshaw": {"strategy": "world", "world_label": "auto rickshaw"},
    
     # Other vehicles
     "ambulance":     {"strategy": "world", "world_label": "ambulance"},
@@ -1379,12 +1366,6 @@ def enforce_prompt_exactness(parsed: dict, results: list):
             filtered.append(r)
             continue
 
-        if mode == "vehicle_only":
-            if req_vehicle and req_vehicle not in obj and str(r.get("vehicle", "")).lower() != req_vehicle:
-                continue
-            filtered.append(r)
-            continue
-
         if mode == "person_shoes_any":
             if req_shoe:
                 r_shoe = normalize_shoe_type(str(r.get("shoe_type", "")).lower())
@@ -1552,15 +1533,6 @@ def parse_prompt(prompt: str):
         return {"mode": "auto", "prompt": prompt}
     p = re.sub(r'\bauto\s*rickshaw\b', 'auto rickshaw', p)
     p = re.sub(r'\btuk[\s-]?tuk\b', 'tuk tuk', p)
-    # Electric-rickshaw typo normalization (prevents fallback to generic YOLOWorld mode)
-    p = re.sub(r'\be[\s-]?ricks?h?a?w\b', 'e-rickshaw', p)
-    p = re.sub(r'\be[\s-]?riks?h?a?w\b', 'e-rickshaw', p)
-    p = re.sub(r'\be[\s-]?rick?saw\b', 'e-rickshaw', p)
-    p = re.sub(r'\be[\s-]?ricks?w\b', 'e-rickshaw', p)
-    p = re.sub(r'\be[\s-]?riks?w\b', 'e-rickshaw', p)
-    p = re.sub(r'\belectric[\s-]?riks?h?a?w\b', 'electric rickshaw', p)
-    p = re.sub(r'\belectric[\s-]?rick?saw\b', 'electric rickshaw', p)
-    p = re.sub(r'\belectric[\s-]?riks?w\b', 'electric rickshaw', p)
     # Common typo normalization for clothing prompts
     p = re.sub(r'\bsaree+\b', 'saree', p)
     p = re.sub(r'\bsare\b', 'saree', p)
@@ -1750,13 +1722,7 @@ def parse_prompt(prompt: str):
         return {"mode": "color_object", "color": None, "vehicle_word": veh_word, "vehicle_info": v_info, "prompt": prompt}
 
     # ========================================
-    # 13. VEHICLE-ONLY (exact vehicle prompt without color/person)
-    # ========================================
-    if veh_word and v_info:
-        return {"mode": "vehicle_only", "vehicle_word": veh_word, "vehicle_info": v_info, "prompt": prompt}
-
-    # ========================================
-    # 14. GENERIC COLOR-ONLY (FALLBACK) – YAHI SABSE PEECHE
+    # 13. GENERIC COLOR-ONLY (FALLBACK) – YAHI SABSE PEECHE
     # ========================================
     m = re.search(rf'(?:person|male|female)\s+(?:wearing|in)\s+(?:a\s+|an\s+)?({colors})', p)
     if m:
@@ -1769,14 +1735,14 @@ def parse_prompt(prompt: str):
         return {"mode": "person_color_only", "color": color, "gender": gender, "prompt": prompt}
 
     # ========================================
-    # 15. PLATE DETECTION
+    # 14. PLATE DETECTION
     # ========================================
     plate_info = detect_plate_prompt_type(prompt.strip())
     if plate_info["type"] != "not_plate":
         return {"mode": "plate", "plate_info": plate_info, "prompt": prompt}
 
     # ========================================
-    # 16. FALLBACK
+    # 15. FALLBACK
     # ========================================
     if "person" in p:
         found = [kw for kw in PERSON_ATTRIBUTE_KEYWORDS if kw in p]
@@ -3831,19 +3797,6 @@ def run_person_helmet_any_mode(cap, prompt, results_list):
 def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.38):
     boxes = []
 
-    def _is_three_wheeler_like(box):
-        x1, y1, x2, y2 = box
-        w = max(1, x2 - x1)
-        h = max(1, y2 - y1)
-        area = w * h
-        aspect = w / (h + 1e-6)
-        # Three-wheelers are usually compact; long-thin boxes are often bikes.
-        if area < 1200:
-            return False
-        if aspect < 0.75 or aspect > 2.80:
-            return False
-        return True
-
     if vehicle_info["strategy"] == "yolo_class":
         res = car_model(frame, classes=vehicle_info["class_ids"], conf=conf_yolo)
         if res[0].boxes is not None:
@@ -3857,103 +3810,21 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                     continue
                 boxes.append([x1, y1, x2, y2])
     else:
-        def _collect_world_boxes(query_label, conf_val):
-            out = []
-            world_model.set_classes([query_label])
-            res_local = world_model(frame, conf=conf_val, imgsz=640)
-            if res_local[0].boxes is None:
-                return out
-            for box, cls_id, cval in zip(
-                res_local[0].boxes.xyxy.cpu().numpy(),
-                res_local[0].boxes.cls.cpu().numpy(),
-                res_local[0].boxes.conf.cpu().numpy()
-            ):
-                pred_label = world_model.names[int(cls_id)].lower().replace("-", " ").strip()
-                pred_label = re.sub(r"\s+", " ", pred_label)
-                x1, y1, x2, y2 = map(int, box)
-                if (x2 - x1) * (y2 - y1) < 500:
-                    continue
-                out.append({
-                    "box": [x1, y1, x2, y2],
-                    "label": pred_label,
-                    "conf": float(cval)
-                })
-            return out
-
+        world_model.set_classes([vehicle_info["world_label"]])
         wl = vehicle_info["world_label"].lower()
         if wl in ("scooter", "moped"):
             conf_world = 0.28
-        if wl == "electric rickshaw":
-            conf_world = min(conf_world, 0.30)
-        if wl in ("auto rickshaw", "electric rickshaw"):
-            auto_cands = _collect_world_boxes("auto rickshaw", conf_world)
-            e_cands = _collect_world_boxes("electric rickshaw", conf_world) + _collect_world_boxes("e-rickshaw", conf_world)
-
-            if wl == "auto rickshaw":
-                primary = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
-                opposite = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
-                # Auto query: reject if overlapping electric evidence is comparable/stronger.
-                for c in primary:
-                    overlap_ops = [o for o in opposite if iou(c["box"], o["box"]) > 0.22]
-                    if overlap_ops:
-                        best_opp = max(overlap_ops, key=lambda o: o["conf"])
-                        if best_opp["conf"] >= (c["conf"] - 0.02):
-                            continue
-                    boxes.append(c["box"])
-            else:
-                # Electric query: accept only explicit electric labels.
-                primary = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
-                opposite = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
-                # Electric query: reject if overlapping auto evidence is close/stronger.
-                for c in primary:
-                    overlap_ops = [o for o in opposite if iou(c["box"], o["box"]) > 0.22]
-                    if overlap_ops:
-                        best_opp = max(overlap_ops, key=lambda o: o["conf"])
-                        if best_opp["conf"] >= (c["conf"] - 0.03):
-                            continue
-                    boxes.append(c["box"])
-        else:
-            world_queries = [vehicle_info["world_label"]]
-            allowed_labels = {wl}
-            for query_label in world_queries:
-                cands = _collect_world_boxes(query_label, conf_world)
-                for c in cands:
-                    if c["label"] not in allowed_labels:
-                        continue
-                    boxes.append(c["box"])
-
-        # Guardrail for e-rickshaw/auto-rickshaw prompts:
-        # YOLOWorld can sometimes map bikes as "auto rickshaw" in crowded scenes.
-        # Remove candidate auto-rickshaw boxes that strongly overlap two-wheeler boxes.
-        if wl in ("auto rickshaw", "electric rickshaw") and boxes:
-            boxes = [b for b in boxes if _is_three_wheeler_like(b)]
-            two_wheeler_boxes = []
-
-            # Strong two-wheeler negatives from YOLO class-3.
-            tw_yolo = car_model(frame, classes=[3], conf=0.30)
-            if tw_yolo[0].boxes is not None:
-                for tw_box in tw_yolo[0].boxes.xyxy.cpu().numpy():
-                    tx1, ty1, tx2, ty2 = map(int, tw_box)
-                    if (tx2 - tx1) * (ty2 - ty1) < 450:
-                        continue
-                    two_wheeler_boxes.append([tx1, ty1, tx2, ty2])
-
-            for tw_label in ("bike", "motorcycle", "motorbike", "scooter"):
-                world_model.set_classes([tw_label])
-                tw_res = world_model(frame, conf=max(conf_world, 0.38), imgsz=640)
-                if tw_res[0].boxes is None:
+        res = world_model(frame, conf=conf_world, imgsz=640)
+        if res[0].boxes is not None:
+            for box, cls_id in zip(res[0].boxes.xyxy.cpu().numpy(),
+                                   res[0].boxes.cls.cpu().numpy()):
+                pred_label = world_model.names[int(cls_id)].lower()
+                if pred_label != wl:
                     continue
-                for tw_box in tw_res[0].boxes.xyxy.cpu().numpy():
-                    tx1, ty1, tx2, ty2 = map(int, tw_box)
-                    if (tx2 - tx1) * (ty2 - ty1) < 450:
-                        continue
-                    two_wheeler_boxes.append([tx1, ty1, tx2, ty2])
-
-            if two_wheeler_boxes:
-                boxes = [
-                    b for b in boxes
-                    if not any(iou(b, twb) > 0.28 for twb in two_wheeler_boxes)
-                ]
+                x1, y1, x2, y2 = map(int, box)
+                if (x2-x1) * (y2-y1) < 500:
+                    continue
+                boxes.append([x1, y1, x2, y2])
 
     # NMS dedup
     unique = []
@@ -4876,50 +4747,6 @@ def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
                     "timestamp":    frame_id
                 })
                 break
-
-
-def run_vehicle_only_mode(cap, vehicle_word, vehicle_info, results_list):
-    """
-    Dedicated exact vehicle detector for prompts like:
-    "rickshaw", "detect e-rickshaw", "find car"
-    """
-    tracker = CooldownTracker(cooldown=25)
-    frame_id = 0
-
-    # Rickshaw queries need slightly lower world conf for far/small objects.
-    conf_world = 0.30 if vehicle_info.get("strategy") == "world" else 0.38
-    conf_yolo = 0.32
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_id += 1
-        if frame_id % FRAME_SKIP != 0:
-            continue
-
-        v_boxes = detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=conf_yolo, conf_world=conf_world)
-        if not v_boxes:
-            continue
-
-        for vx1, vy1, vx2, vy2 in v_boxes:
-            area = (vx2 - vx1) * (vy2 - vy1)
-            if area < AREA_THRESHOLD:
-                continue
-
-            key = f"vo_{vehicle_word}_{vx1//55}_{vy1//55}"
-            if tracker.should_skip(key, frame_id):
-                continue
-            tracker.update(key, frame_id)
-
-            label = vehicle_word
-            results_list.append({
-                "object": label,
-                "vehicle": vehicle_word,
-                "bbox": [vx1, vy1, vx2, vy2],
-                "image_path": save_detection(frame, [vx1, vy1, vx2, vy2], label, frame_id, "img_vehicle"),
-                "timestamp": frame_id
-            })
 
 
 
@@ -6273,10 +6100,6 @@ async def process_video(req: Request):
             parsed["color"], results_list)
     elif mode == "person_vehicle":
         run_person_vehicle_mode(
-            cap, parsed["vehicle_word"], parsed["vehicle_info"],
-            results_list)
-    elif mode == "vehicle_only":
-        run_vehicle_only_mode(
             cap, parsed["vehicle_word"], parsed["vehicle_info"],
             results_list)
 
