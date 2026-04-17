@@ -989,8 +989,19 @@ VEHICLE_ALIASES = {
     "tuk tuk":       {"strategy": "world", "world_label": "auto rickshaw"},
     "tuktuk":        {"strategy": "world", "world_label": "auto rickshaw"},
     "tempo":         {"strategy": "world", "world_label": "auto rickshaw"},
-    "e-rickshaw":    {"strategy": "world", "world_label": "auto rickshaw"},
-    "electric rickshaw": {"strategy": "world", "world_label": "auto rickshaw"},
+    # Electric rickshaw must stay separate from auto-rickshaw.
+    "e-rickshaw":        {"strategy": "world", "world_label": "electric rickshaw"},
+    "e rickshaw":        {"strategy": "world", "world_label": "electric rickshaw"},
+    "electric rickshaw": {"strategy": "world", "world_label": "electric rickshaw"},
+    "electric-rickshaw": {"strategy": "world", "world_label": "electric rickshaw"},
+    "erickshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
+    # Common Hinglish typos
+    "e-rikshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
+    "e rikshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
+    "e-riksaw":          {"strategy": "world", "world_label": "electric rickshaw"},
+    "e riksaw":          {"strategy": "world", "world_label": "electric rickshaw"},
+    "e-riksahw":         {"strategy": "world", "world_label": "electric rickshaw"},
+    "e riksahw":         {"strategy": "world", "world_label": "electric rickshaw"},
    
     # Other vehicles
     "ambulance":     {"strategy": "world", "world_label": "ambulance"},
@@ -1533,6 +1544,12 @@ def parse_prompt(prompt: str):
         return {"mode": "auto", "prompt": prompt}
     p = re.sub(r'\bauto\s*rickshaw\b', 'auto rickshaw', p)
     p = re.sub(r'\btuk[\s-]?tuk\b', 'tuk tuk', p)
+    # Electric-rickshaw typo normalization (prevents fallback to generic YOLOWorld mode)
+    p = re.sub(r'\be[\s-]?ricks?h?a?w\b', 'e-rickshaw', p)
+    p = re.sub(r'\be[\s-]?riks?h?a?w\b', 'e-rickshaw', p)
+    p = re.sub(r'\be[\s-]?rick?saw\b', 'e-rickshaw', p)
+    p = re.sub(r'\belectric[\s-]?riks?h?a?w\b', 'electric rickshaw', p)
+    p = re.sub(r'\belectric[\s-]?rick?saw\b', 'electric rickshaw', p)
     # Common typo normalization for clothing prompts
     p = re.sub(r'\bsaree+\b', 'saree', p)
     p = re.sub(r'\bsare\b', 'saree', p)
@@ -3814,11 +3831,14 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
         wl = vehicle_info["world_label"].lower()
         if wl in ("scooter", "moped"):
             conf_world = 0.28
+        if wl == "electric rickshaw":
+            conf_world = min(conf_world, 0.30)
         res = world_model(frame, conf=conf_world, imgsz=640)
         if res[0].boxes is not None:
             for box, cls_id in zip(res[0].boxes.xyxy.cpu().numpy(),
                                    res[0].boxes.cls.cpu().numpy()):
-                pred_label = world_model.names[int(cls_id)].lower()
+                pred_label = world_model.names[int(cls_id)].lower().replace("-", " ").strip()
+                pred_label = re.sub(r"\s+", " ", pred_label)
                 if pred_label != wl:
                     continue
                 x1, y1, x2, y2 = map(int, box)
@@ -3829,7 +3849,7 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
         # Guardrail for e-rickshaw/auto-rickshaw prompts:
         # YOLOWorld can sometimes map bikes as "auto rickshaw" in crowded scenes.
         # Remove candidate auto-rickshaw boxes that strongly overlap two-wheeler boxes.
-        if wl == "auto rickshaw" and boxes:
+        if wl in ("auto rickshaw", "electric rickshaw") and boxes:
             two_wheeler_boxes = []
             for tw_label in ("bike", "motorcycle", "motorbike", "scooter"):
                 world_model.set_classes([tw_label])
