@@ -3892,31 +3892,24 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
             if wl == "auto rickshaw":
                 primary = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
                 opposite = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
+                # Auto query: reject if overlapping electric evidence is comparable/stronger.
+                for c in primary:
+                    overlap_ops = [o for o in opposite if iou(c["box"], o["box"]) > 0.22]
+                    if overlap_ops:
+                        best_opp = max(overlap_ops, key=lambda o: o["conf"])
+                        if best_opp["conf"] >= (c["conf"] - 0.02):
+                            continue
+                    boxes.append(c["box"])
             else:
-                # Strict electric class: do NOT directly accept generic "rickshaw" label.
+                # Electric query: accept only explicit electric labels.
                 primary = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
                 opposite = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
-
-            # Soft split: keep candidate unless opposite class is clearly stronger.
-            # Hard reject caused true e-rickshaw misses in mixed-label frames.
-            for c in primary:
-                overlap_ops = [o for o in opposite if iou(c["box"], o["box"]) > 0.22]
-                if overlap_ops:
-                    best_opp = max(overlap_ops, key=lambda o: o["conf"])
-                    # reject only if opposite prediction is meaningfully stronger
-                    if best_opp["conf"] >= (c["conf"] + 0.08):
-                        continue
-                boxes.append(c["box"])
-
-            # Fallback: if electric query found nothing, allow generic "rickshaw"
-            # only when auto-class evidence is weak/non-overlapping.
-            if wl == "electric rickshaw" and not boxes:
-                generic_rickshaw = [c for c in e_cands if c["label"] == "rickshaw"]
-                for c in generic_rickshaw:
-                    overlap_auto = [o for o in opposite if iou(c["box"], o["box"]) > 0.25]
-                    if overlap_auto:
-                        best_auto = max(overlap_auto, key=lambda o: o["conf"])
-                        if best_auto["conf"] >= c["conf"]:
+                # Electric query: reject if overlapping auto evidence is close/stronger.
+                for c in primary:
+                    overlap_ops = [o for o in opposite if iou(c["box"], o["box"]) > 0.22]
+                    if overlap_ops:
+                        best_opp = max(overlap_ops, key=lambda o: o["conf"])
+                        if best_opp["conf"] >= (c["conf"] - 0.03):
                             continue
                     boxes.append(c["box"])
         else:
