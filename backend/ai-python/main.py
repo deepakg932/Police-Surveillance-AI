@@ -1000,6 +1000,8 @@ VEHICLE_ALIASES = {
     "e rikshaw":         {"strategy": "world", "world_label": "electric rickshaw"},
     "e-riksaw":          {"strategy": "world", "world_label": "electric rickshaw"},
     "e riksaw":          {"strategy": "world", "world_label": "electric rickshaw"},
+    "e-riksw":           {"strategy": "world", "world_label": "electric rickshaw"},
+    "e riksw":           {"strategy": "world", "world_label": "electric rickshaw"},
     "e-riksahw":         {"strategy": "world", "world_label": "electric rickshaw"},
     "e riksahw":         {"strategy": "world", "world_label": "electric rickshaw"},
    
@@ -1548,8 +1550,11 @@ def parse_prompt(prompt: str):
     p = re.sub(r'\be[\s-]?ricks?h?a?w\b', 'e-rickshaw', p)
     p = re.sub(r'\be[\s-]?riks?h?a?w\b', 'e-rickshaw', p)
     p = re.sub(r'\be[\s-]?rick?saw\b', 'e-rickshaw', p)
+    p = re.sub(r'\be[\s-]?ricks?w\b', 'e-rickshaw', p)
+    p = re.sub(r'\be[\s-]?riks?w\b', 'e-rickshaw', p)
     p = re.sub(r'\belectric[\s-]?riks?h?a?w\b', 'electric rickshaw', p)
     p = re.sub(r'\belectric[\s-]?rick?saw\b', 'electric rickshaw', p)
+    p = re.sub(r'\belectric[\s-]?riks?w\b', 'electric rickshaw', p)
     # Common typo normalization for clothing prompts
     p = re.sub(r'\bsaree+\b', 'saree', p)
     p = re.sub(r'\bsare\b', 'saree', p)
@@ -3827,19 +3832,28 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                     continue
                 boxes.append([x1, y1, x2, y2])
     else:
-        world_model.set_classes([vehicle_info["world_label"]])
         wl = vehicle_info["world_label"].lower()
         if wl in ("scooter", "moped"):
             conf_world = 0.28
         if wl == "electric rickshaw":
             conf_world = min(conf_world, 0.30)
-        res = world_model(frame, conf=conf_world, imgsz=640)
-        if res[0].boxes is not None:
+        world_queries = [vehicle_info["world_label"]]
+        allowed_labels = {wl}
+        if wl == "electric rickshaw":
+            # Real-world model outputs vary; accept close variants for e-rickshaw intent.
+            world_queries = ["electric rickshaw", "e-rickshaw", "auto rickshaw", "rickshaw"]
+            allowed_labels = {"electric rickshaw", "e rickshaw", "auto rickshaw", "rickshaw"}
+
+        for query_label in world_queries:
+            world_model.set_classes([query_label])
+            res = world_model(frame, conf=conf_world, imgsz=640)
+            if res[0].boxes is None:
+                continue
             for box, cls_id in zip(res[0].boxes.xyxy.cpu().numpy(),
                                    res[0].boxes.cls.cpu().numpy()):
                 pred_label = world_model.names[int(cls_id)].lower().replace("-", " ").strip()
                 pred_label = re.sub(r"\s+", " ", pred_label)
-                if pred_label != wl:
+                if pred_label not in allowed_labels:
                     continue
                 x1, y1, x2, y2 = map(int, box)
                 if (x2-x1) * (y2-y1) < 500:
