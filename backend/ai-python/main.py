@@ -3893,7 +3893,8 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                 primary = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
                 opposite = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
             else:
-                primary = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw", "rickshaw"}]
+                # Strict electric class: do NOT directly accept generic "rickshaw" label.
+                primary = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw"}]
                 opposite = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
 
             # Soft split: keep candidate unless opposite class is clearly stronger.
@@ -3906,6 +3907,18 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                     if best_opp["conf"] >= (c["conf"] + 0.08):
                         continue
                 boxes.append(c["box"])
+
+            # Fallback: if electric query found nothing, allow generic "rickshaw"
+            # only when auto-class evidence is weak/non-overlapping.
+            if wl == "electric rickshaw" and not boxes:
+                generic_rickshaw = [c for c in e_cands if c["label"] == "rickshaw"]
+                for c in generic_rickshaw:
+                    overlap_auto = [o for o in opposite if iou(c["box"], o["box"]) > 0.25]
+                    if overlap_auto:
+                        best_auto = max(overlap_auto, key=lambda o: o["conf"])
+                        if best_auto["conf"] >= c["conf"]:
+                            continue
+                    boxes.append(c["box"])
         else:
             world_queries = [vehicle_info["world_label"]]
             allowed_labels = {wl}
