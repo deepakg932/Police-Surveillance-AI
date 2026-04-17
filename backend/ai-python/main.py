@@ -3896,10 +3896,15 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                 primary = [c for c in e_cands if c["label"] in {"electric rickshaw", "e rickshaw", "rickshaw"}]
                 opposite = [c for c in auto_cands if c["label"] in {"auto rickshaw", "rickshaw"}]
 
-            # Strict split: if candidate overlaps opposite class, reject it.
+            # Soft split: keep candidate unless opposite class is clearly stronger.
+            # Hard reject caused true e-rickshaw misses in mixed-label frames.
             for c in primary:
-                if any(iou(c["box"], o["box"]) > 0.22 for o in opposite):
-                    continue
+                overlap_ops = [o for o in opposite if iou(c["box"], o["box"]) > 0.22]
+                if overlap_ops:
+                    best_opp = max(overlap_ops, key=lambda o: o["conf"])
+                    # reject only if opposite prediction is meaningfully stronger
+                    if best_opp["conf"] >= (c["conf"] + 0.08):
+                        continue
                 boxes.append(c["box"])
         else:
             world_queries = [vehicle_info["world_label"]]
@@ -3941,7 +3946,7 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
             if two_wheeler_boxes:
                 boxes = [
                     b for b in boxes
-                    if not any(iou(b, twb) > 0.20 for twb in two_wheeler_boxes)
+                    if not any(iou(b, twb) > 0.28 for twb in two_wheeler_boxes)
                 ]
 
     # NMS dedup
