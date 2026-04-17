@@ -3826,6 +3826,28 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
                     continue
                 boxes.append([x1, y1, x2, y2])
 
+        # Guardrail for e-rickshaw/auto-rickshaw prompts:
+        # YOLOWorld can sometimes map bikes as "auto rickshaw" in crowded scenes.
+        # Remove candidate auto-rickshaw boxes that strongly overlap two-wheeler boxes.
+        if wl == "auto rickshaw" and boxes:
+            two_wheeler_boxes = []
+            for tw_label in ("bike", "motorcycle", "motorbike", "scooter"):
+                world_model.set_classes([tw_label])
+                tw_res = world_model(frame, conf=max(conf_world, 0.38), imgsz=640)
+                if tw_res[0].boxes is None:
+                    continue
+                for tw_box in tw_res[0].boxes.xyxy.cpu().numpy():
+                    tx1, ty1, tx2, ty2 = map(int, tw_box)
+                    if (tx2 - tx1) * (ty2 - ty1) < 450:
+                        continue
+                    two_wheeler_boxes.append([tx1, ty1, tx2, ty2])
+
+            if two_wheeler_boxes:
+                boxes = [
+                    b for b in boxes
+                    if not any(iou(b, twb) > 0.35 for twb in two_wheeler_boxes)
+                ]
+
     # NMS dedup
     unique = []
     for b in boxes:
