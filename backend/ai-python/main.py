@@ -1379,6 +1379,12 @@ def enforce_prompt_exactness(parsed: dict, results: list):
             filtered.append(r)
             continue
 
+        if mode == "vehicle_only":
+            if req_vehicle and req_vehicle not in obj and str(r.get("vehicle", "")).lower() != req_vehicle:
+                continue
+            filtered.append(r)
+            continue
+
         if mode == "person_shoes_any":
             if req_shoe:
                 r_shoe = normalize_shoe_type(str(r.get("shoe_type", "")).lower())
@@ -1744,7 +1750,13 @@ def parse_prompt(prompt: str):
         return {"mode": "color_object", "color": None, "vehicle_word": veh_word, "vehicle_info": v_info, "prompt": prompt}
 
     # ========================================
-    # 13. GENERIC COLOR-ONLY (FALLBACK) – YAHI SABSE PEECHE
+    # 13. VEHICLE-ONLY (exact vehicle prompt without color/person)
+    # ========================================
+    if veh_word and v_info:
+        return {"mode": "vehicle_only", "vehicle_word": veh_word, "vehicle_info": v_info, "prompt": prompt}
+
+    # ========================================
+    # 14. GENERIC COLOR-ONLY (FALLBACK) – YAHI SABSE PEECHE
     # ========================================
     m = re.search(rf'(?:person|male|female)\s+(?:wearing|in)\s+(?:a\s+|an\s+)?({colors})', p)
     if m:
@@ -1757,14 +1769,14 @@ def parse_prompt(prompt: str):
         return {"mode": "person_color_only", "color": color, "gender": gender, "prompt": prompt}
 
     # ========================================
-    # 14. PLATE DETECTION
+    # 15. PLATE DETECTION
     # ========================================
     plate_info = detect_plate_prompt_type(prompt.strip())
     if plate_info["type"] != "not_plate":
         return {"mode": "plate", "plate_info": plate_info, "prompt": prompt}
 
     # ========================================
-    # 15. FALLBACK
+    # 16. FALLBACK
     # ========================================
     if "person" in p:
         found = [kw for kw in PERSON_ATTRIBUTE_KEYWORDS if kw in p]
@@ -4829,6 +4841,50 @@ def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
                 break
 
 
+def run_vehicle_only_mode(cap, vehicle_word, vehicle_info, results_list):
+    """
+    Dedicated exact vehicle detector for prompts like:
+    "rickshaw", "detect e-rickshaw", "find car"
+    """
+    tracker = CooldownTracker(cooldown=25)
+    frame_id = 0
+
+    # Rickshaw queries need slightly lower world conf for far/small objects.
+    conf_world = 0.30 if vehicle_info.get("strategy") == "world" else 0.38
+    conf_yolo = 0.32
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_id += 1
+        if frame_id % FRAME_SKIP != 0:
+            continue
+
+        v_boxes = detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=conf_yolo, conf_world=conf_world)
+        if not v_boxes:
+            continue
+
+        for vx1, vy1, vx2, vy2 in v_boxes:
+            area = (vx2 - vx1) * (vy2 - vy1)
+            if area < AREA_THRESHOLD:
+                continue
+
+            key = f"vo_{vehicle_word}_{vx1//55}_{vy1//55}"
+            if tracker.should_skip(key, frame_id):
+                continue
+            tracker.update(key, frame_id)
+
+            label = vehicle_word
+            results_list.append({
+                "object": label,
+                "vehicle": vehicle_word,
+                "bbox": [vx1, vy1, vx2, vy2],
+                "image_path": save_detection(frame, [vx1, vy1, vx2, vy2], label, frame_id, "img_vehicle"),
+                "timestamp": frame_id
+            })
+
+
 
 
 
@@ -6180,6 +6236,10 @@ async def process_video(req: Request):
             parsed["color"], results_list)
     elif mode == "person_vehicle":
         run_person_vehicle_mode(
+            cap, parsed["vehicle_word"], parsed["vehicle_info"],
+            results_list)
+    elif mode == "vehicle_only":
+        run_vehicle_only_mode(
             cap, parsed["vehicle_word"], parsed["vehicle_info"],
             results_list)
 
