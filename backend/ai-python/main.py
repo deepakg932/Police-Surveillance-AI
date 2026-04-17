@@ -129,7 +129,7 @@ def get_session_id():
         SESSION_ID = str(int(time.time() * 1000))
     return SESSION_ID
 
-FRAME_SKIP     = 1  # check more frames for plates
+FRAME_SKIP     = 5  # check more frames for plates
 AREA_THRESHOLD = 300
 BLUR_THRESHOLD = 15
 COOLDOWN       = 5
