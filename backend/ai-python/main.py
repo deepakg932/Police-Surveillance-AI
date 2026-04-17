@@ -3819,6 +3819,19 @@ def run_person_helmet_any_mode(cap, prompt, results_list):
 def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.38):
     boxes = []
 
+    def _is_three_wheeler_like(box):
+        x1, y1, x2, y2 = box
+        w = max(1, x2 - x1)
+        h = max(1, y2 - y1)
+        area = w * h
+        aspect = w / (h + 1e-6)
+        # Three-wheelers are usually compact; long-thin boxes are often bikes.
+        if area < 1200:
+            return False
+        if aspect < 0.75 or aspect > 2.80:
+            return False
+        return True
+
     if vehicle_info["strategy"] == "yolo_class":
         res = car_model(frame, classes=vehicle_info["class_ids"], conf=conf_yolo)
         if res[0].boxes is not None:
@@ -3864,7 +3877,18 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
         # YOLOWorld can sometimes map bikes as "auto rickshaw" in crowded scenes.
         # Remove candidate auto-rickshaw boxes that strongly overlap two-wheeler boxes.
         if wl in ("auto rickshaw", "electric rickshaw") and boxes:
+            boxes = [b for b in boxes if _is_three_wheeler_like(b)]
             two_wheeler_boxes = []
+
+            # Strong two-wheeler negatives from YOLO class-3.
+            tw_yolo = car_model(frame, classes=[3], conf=0.30)
+            if tw_yolo[0].boxes is not None:
+                for tw_box in tw_yolo[0].boxes.xyxy.cpu().numpy():
+                    tx1, ty1, tx2, ty2 = map(int, tw_box)
+                    if (tx2 - tx1) * (ty2 - ty1) < 450:
+                        continue
+                    two_wheeler_boxes.append([tx1, ty1, tx2, ty2])
+
             for tw_label in ("bike", "motorcycle", "motorbike", "scooter"):
                 world_model.set_classes([tw_label])
                 tw_res = world_model(frame, conf=max(conf_world, 0.38), imgsz=640)
@@ -3879,7 +3903,7 @@ def detect_vehicles_in_frame(frame, vehicle_info, conf_yolo=0.40, conf_world=0.3
             if two_wheeler_boxes:
                 boxes = [
                     b for b in boxes
-                    if not any(iou(b, twb) > 0.35 for twb in two_wheeler_boxes)
+                    if not any(iou(b, twb) > 0.20 for twb in two_wheeler_boxes)
                 ]
 
     # NMS dedup
