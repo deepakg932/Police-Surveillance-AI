@@ -6130,4 +6130,3 @@ async def process_video(req: Request):
         "parsed_prompt": parsed,
         "total_found":   len(results_list)
     }
-
