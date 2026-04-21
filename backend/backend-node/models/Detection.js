@@ -4,9 +4,22 @@ const detectionSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
-
-    index: true, // fast query ke liye
+    index: true,
   },
+
+  jobId: {
+    type: String,
+    index: true,
+  },
+
+  // 🔥 NEW (MOST IMPORTANT)
+  status: {
+    type: String,
+    enum: ["processing", "completed", "failed"],
+    default: "processing",
+    index: true,
+  },
+
   fileName: {
     type: String,
     index: true,
@@ -16,7 +29,11 @@ const detectionSchema = new mongoose.Schema({
     type: String,
     default: "",
   },
-
+isJob:{
+  type:Boolean,
+  default: false,
+  index: true,
+},
   imagePath: {
     type: String,
     default: "",
@@ -78,35 +95,6 @@ const detectionSchema = new mongoose.Schema({
   bbox: {
     type: [Number],
     default: [],
-    set: function (v) {
-      // ===== SMART CONVERSION =====
-      // Handle empty string, null, undefined
-      if (!v || v === "" || v === null || v === undefined) {
-        return [];
-      }
-
-      // If already array, validate length
-      if (Array.isArray(v)) {
-        return v.length === 4 ? v : [];
-      }
-
-      // If string like "x1,y1,x2,y2", convert to array
-      if (typeof v === "string") {
-        if (v.trim() === "") return []; // ← YEH ADD KARO
-        const nums = v
-          .split(",")
-          .map((n) => parseFloat(n.trim()))
-          .filter((n) => !isNaN(n));
-        return nums.length === 4 ? nums : [];
-      }
-      return [];
-    },
-    validate: {
-      validator: function (v) {
-        return Array.isArray(v) && (v.length === 0 || v.length === 4);
-      },
-      message: "bbox must be empty array [] or 4 numbers",
-    },
   },
 
   timestamp: {

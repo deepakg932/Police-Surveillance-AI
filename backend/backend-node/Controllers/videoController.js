@@ -83,6 +83,7 @@ const mongoose = require("mongoose")
 
 
 
+
 exports.searchDetections = async (req, res) => {
   try {
     const userId = req.userId;
@@ -100,6 +101,13 @@ exports.searchDetections = async (req, res) => {
     if (object) {
       match.object = { $regex: object, $options: "i" };
     }
+
+    const { jobId } = req.query;
+    if (jobId) {
+  match.jobId = jobId;
+  match.isJob = { $ne: true };
+}
+
 
     if (textNote) {
       match.textNote = { $regex: textNote, $options: "i" };
@@ -166,6 +174,7 @@ exports.searchDetections = async (req, res) => {
         image_path: d.imagePath,
         bbox: d.bbox,
         screenshotUrl: d.screenshotUrl,
+        processingTime: d.processingTime || null,
       })),
     });
   } catch (err) {
@@ -173,7 +182,6 @@ exports.searchDetections = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
-
 // exports.uploadAndProcess = async (req, res) => {
 //   try {
 //     const userId = req.userId; // ✅ middleware se aaya
@@ -320,32 +328,213 @@ exports.searchDetections = async (req, res) => {
 //     });
 //   }
 // };
+const addCommonPersonIds = (rows = []) => {
+  let counter = 0;
+  const signatureMap = new Map();
 
+  return rows.map((row) => {
+    const object = String(row.object || "").toLowerCase();
+    const isPerson = object.includes("person");
+    if (!isPerson) return row;
 
+    const signature = [
+      String(row.ocrText || "").toLowerCase(),
+      String(row.color || "").toLowerCase(),
+      object,
+    ].join("|");
+
+    let commonPersonId = signatureMap.get(signature);
+    if (!commonPersonId) {
+      counter += 1;
+      commonPersonId = `common_${counter}`;
+      signatureMap.set(signature, commonPersonId);
+    }
+
+    return { ...row, commonPersonId };
+  });
+};
+
+const processVideoInBackground = async (jobId, videoUrl, userId, userPrompt, imageUrl = null) => {
+  try {
+    const BASE_URL = process.env.BASE_URL;
+    const startTime = Date.now();
+
+    const response = await axios.post(
+      `${process.env.PYTHON_API_URL}/process`,
+      { fileUrl: videoUrl, imageUrl, prompt: userPrompt },
+      { timeout: 7200000 }
+    );
+
+    const endTime = Date.now();
+    const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
+
+    const detections = (response.data.results || []).map((d, index) => {
+      const cleanPath = (d.image_path || "").replace(/\\/g, "/");
+      const fileNameOnly = cleanPath.split("/").pop();
+
+      return {
+        userId: new mongoose.Types.ObjectId(userId),
+        jobId,
+        status: "processing",
+        fileName: videoUrl.split("/").pop(),
+        textNote: userPrompt,
+        object: d.object || d.prompt || "unknown",
+        ocrText: d.ocr_text || "",
+        confidence: d.confidence || d.similarity || 0.5,
+        trackingId: `track_${Date.now()}_${index}`,
+        timestamp: d.timestamp || 0,
+        bbox: Array.isArray(d.bbox) ? d.bbox : [],
+        imagePath: fileNameOnly,
+        screenshotUrl: fileNameOnly
+          ? `${BASE_URL}/uploads/detected_frames/${fileNameOnly}`
+          : "",
+        processingTime: processingTimeStr,
+        videoUrl,
+        color: d.color || "",
+      };
+    });
+
+    if (detections.length > 0) {
+      await Detection.insertMany(detections, { ordered: false });
+    }
+
+    // ✅ mark completed
+    await Detection.updateMany(
+      { jobId },
+      { $set: { status: "completed" } }
+    );
+
+  } catch (err) {
+    console.error("Background Error:", err.message);
+
+    await Detection.updateMany(
+      { jobId },
+      { $set: { status: "failed" } }
+    );
+  }
+};
 
 exports.uploadAndProcess = async (req, res) => {
   try {
     const userId = req.userId;
-    const videoFile = req.files?.file?.[0];
-    const imageFile = req.files?.image?.[0];
+    const videoFiles = req.files?.file || [];
     const userPrompt = req.body.text || "person";
+    console.log("[uploadAndProcess] request", {
+      userId,
+      totalVideos: videoFiles.length,
+      hasImage: Boolean(req.files?.image?.[0]),
+      prompt: userPrompt,
+    });
 
-    if (!videoFile) {
+    if (!videoFiles.length) {
       return res.status(400).json({ message: "Video file missing" });
+    }
+
+    const BASE_URL = process.env.BASE_URL;
+    const imageFile = req.files?.image?.[0];
+    const imageUrl = imageFile ? `${BASE_URL}/uploads/${imageFile.filename}` : null;
+
+    // Keep async job flow for single video (frontend already supports polling)
+    if (videoFiles.length === 1) {
+      const videoFile = videoFiles[0];
+      const jobId = `job_${Date.now()}`;
+      const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
+
+      await Detection.create({
+        userId: new mongoose.Types.ObjectId(userId),
+        jobId,
+        status: "processing",
+        fileName: videoFile.filename,
+        videoUrl,
+        textNote: userPrompt,
+        isJob: true,
+      });
+
+      processVideoInBackground(jobId, videoUrl, userId, userPrompt, imageUrl);
+      console.log("[uploadAndProcess] single job created", { jobId, videoUrl });
+
+      return res.json({
+        message: "Upload successful",
+        jobId,
+        status: "processing",
+      });
+    }
+
+    // Multi-video async: upload first, then process each video in background.
+    const batchJobId = `job_${Date.now()}`;
+    await Detection.create({
+      userId: new mongoose.Types.ObjectId(userId),
+      jobId: batchJobId,
+      status: "processing",
+      fileName: "__batch__",
+      textNote: userPrompt,
+      isJob: true,
+    });
+
+    videoFiles.forEach(async (videoFile, index) => {
+      try {
+        const childJobId = `${batchJobId}__v${index + 1}`;
+        const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
+
+        await Detection.create({
+          userId: new mongoose.Types.ObjectId(userId),
+          jobId: childJobId,
+          status: "processing",
+          fileName: videoFile.filename,
+          videoUrl,
+          textNote: userPrompt,
+          isJob: true,
+        });
+
+        processVideoInBackground(childJobId, videoUrl, userId, userPrompt, imageUrl);
+        console.log("[uploadAndProcess] child job queued", { batchJobId, childJobId, videoUrl });
+      } catch (childErr) {
+        console.error("Child job create error:", childErr.message);
+      }
+    });
+
+    return res.json({
+      message: "Upload successful",
+      mode: "Multi Video Upload (Background)",
+      jobId: batchJobId,
+      status: "processing",
+      totalVideos: videoFiles.length,
+    });
+
+  } catch (err) {
+    console.error("Upload Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+// ✅ IMAGE-ONLY DETECTION (no video)
+exports.detectFromImage = async (req, res) => {
+  try {
+    const userId = req.userId;
+    // Accept either `image` field or `file` field when it's actually an image.
+    let imageFile = req.files?.image?.[0];
+    if (!imageFile) {
+      const maybe = req.files?.file?.[0];
+      if (maybe && typeof maybe.mimetype === "string" && maybe.mimetype.startsWith("image/")) {
+        imageFile = maybe;
+      }
+    }
+    // If user doesn't provide prompt for image-only, run AUTO detect.
+    const userPrompt = (req.body.text && String(req.body.text).trim()) ? req.body.text : "auto";
+
+    if (!imageFile) {
+      return res.status(400).json({ message: "Image file missing" });
     }
 
     const startTime = Date.now();
     const BASE_URL = process.env.BASE_URL;
-    const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
-    const imageUrl = imageFile
-      ? `${BASE_URL}/uploads/${imageFile.filename}`
-      : null;
+    const imageUrl = `${BASE_URL}/uploads/${imageFile.filename}`;
 
     let response;
     try {
+      // fileUrl intentionally empty => Python will run reference_image_only path
       response = await axios.post(
         `${process.env.PYTHON_API_URL}/process`,
-        { fileUrl: videoUrl, imageUrl, prompt: userPrompt },
+        { fileUrl: "", imageUrl, prompt: userPrompt },
         {
           timeout: 7200000,
           maxContentLength: Infinity,
@@ -362,201 +551,333 @@ exports.uploadAndProcess = async (req, res) => {
     const endTime = Date.now();
     const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
 
-    // ✅ DEBUG — dekho Python se kya aa raha hai
-    console.log("=== PYTHON RESPONSE ===");
-    console.log("Total from Python:", response.data.results?.length);
-    console.log("Mode:", response.data.mode);
-    console.log("Sample:", JSON.stringify(response.data.results?.slice(0, 2)));
-    console.log("======================");
-
     const detections = (response.data.results || []).map((d, index) => {
-      // ✅ image_path clean karo
       const cleanPath = (d.image_path || "").replace(/\\/g, "/");
+      const fileNameOnly = cleanPath.split("/").pop();
 
-      // ✅ confidence — mode ke hisaab se
-      let conf = 0.85;
+      let conf = 0.50;
       if (typeof d.confidence === "number") conf = d.confidence;
-      else if (d.plate)                     conf = 0.90;
-      else if (typeof d.age === "number")   conf = 0.85;
-
-      // ✅ bbox — multiple fields check karo
-      let bbox = [];
-      if (Array.isArray(d.bbox) && d.bbox.length === 4) {
-        bbox = d.bbox;
-      } else if (Array.isArray(d.plate_bbox) && d.plate_bbox.length === 4) {
-        bbox = d.plate_bbox;
-      } else if (Array.isArray(d.person_bbox) && d.person_bbox.length === 4) {
-        bbox = d.person_bbox;
-      } else if (Array.isArray(d.vehicle_bbox) && d.vehicle_bbox.length === 4) {
-        bbox = d.vehicle_bbox;
-      }
-
-      // ✅ ocrText — multiple fields check karo
-      const ocrText = d.ocr_text || d.plate || d.ocrText || "";
-
-      // ✅ object label
-      const objectLabel = d.object || d.prompt || "unknown";
-
-      // ✅ color
-      const color = d.color || d.vehicle || "";
+      else if (typeof d.similarity === "number") conf = d.similarity;
+      else if (typeof d.confidence === "string")
+        conf = parseFloat(d.confidence) || 0.50;
+      else if (typeof d.similarity === "string")
+        conf = parseFloat(d.similarity) || 0.50;
 
       return {
-        object:     objectLabel,
-        ocrText:    ocrText,
+        object: d.object || d.prompt || "unknown",
+        ocrText: d.ocr_text || d.plate || d.ocrText || "",
         confidence: conf,
-        trackingId: (
-          d.trackingId || `track_${Date.now()}_${index}`
-        ).toString(),
-        timestamp:  typeof d.timestamp === "number" ? d.timestamp : 0,
-        bbox:       bbox,
-        imagePath:  cleanPath,
-        color:      color,
+        processingTime: processingTimeStr,
+        trackingId: (d.trackingId || `img_${Date.now()}_${index}`).toString(),
+        timestamp: typeof d.timestamp === "number" ? d.timestamp : 0,
+        bbox: Array.isArray(d.bbox) ? d.bbox : [],
+        imagePath: fileNameOnly,
+        color: d.color || "",
       };
     });
 
-    console.log("After mapping:", detections.length);
-
-    // ✅ Save to MongoDB
-    if (detections.length > 0) {
-      const detectionsToSave = detections.map((d) => {
-        // ✅ bbox extra sanitize
-        let safeBbox = [];
-        if (Array.isArray(d.bbox) && d.bbox.length === 4) {
-          safeBbox = d.bbox.map(Number).filter((n) => !isNaN(n));
-          if (safeBbox.length !== 4) safeBbox = [];
-        }
-
-        return {
-          userId:         new mongoose.Types.ObjectId(userId),
-          fileName:       videoFile.filename,
-          textNote:       userPrompt,
-          object:         d.object,
-          ocrText:        d.ocrText,
-          confidence:     d.confidence,
-          timestamp:      d.timestamp,
-          trackingId:     d.trackingId,
-          bbox:           safeBbox,
-          imagePath:      d.imagePath,
-          screenshotUrl:  d.imagePath ? `${BASE_URL}/${d.imagePath}` : "",
-          processingTime: processingTimeStr,
-          videoUrl:       videoUrl,
-          color:          d.color || "",
-        };
-      });
-
-      try {
-        await Detection.insertMany(detectionsToSave, { ordered: false });
-        console.log("Saved to DB:", detectionsToSave.length);
-      } catch (dbErr) {
-        console.error("DB Save Error:", dbErr.message);
-      }
-    }
-
-    // ✅ Counting
-    const uniqueTrackingIds = new Set(detections.map((d) => d.trackingId));
     const normalizedPrompt = userPrompt
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, "")
       .trim();
 
     return res.json({
-      message:          "Success",
-      processing_time:  processingTimeStr,
-      mode:             response.data.mode || "unknown",
-      total_found:      detections.length,
-      totalUniqueObjects: uniqueTrackingIds.size,
+      message: "Success",
+      processing_time: processingTimeStr,
+      mode: response.data.mode || "image_only",
+      total_found: detections.length,
+      totalUniqueObjects: new Set(detections.map((d) => d.trackingId)).size,
       counts: {
         [`total_${normalizedPrompt.replace(/\s+/g, "_")}`]: detections.length,
       },
       results: detections.map((d) => ({
-        object:       d.object,
-        ocrText:      d.ocrText,
-        confidence:   d.confidence,
-        trackingId:   d.trackingId,
-        timestamp:    d.timestamp,
-        bbox:         d.bbox,
-        image_path:   d.imagePath,
-        screenshotUrl: d.imagePath ? `${BASE_URL}/${d.imagePath}` : "",
-        color:        d.color,
+        object: d.object,
+        ocrText: d.ocrText,
+        confidence: d.confidence,
+        trackingId: d.trackingId,
+        timestamp: d.timestamp,
+        bbox: d.bbox,
+        image_path: d.imagePath,
+        screenshotUrl: d.imagePath
+          ? `${BASE_URL}/uploads/detected_frames/${d.imagePath}`
+          : "",
+        color: d.color,
       })),
+      source: "image_only",
+      uploadedImageUrl: imageUrl,
     });
   } catch (err) {
-    console.error("❌ uploadAndProcess Error:", err);
+    console.error("detectFromImage Error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
-
-exports.searchDetections = async (req, res) => {
+exports.deleteByTrackingId = async (req, res) => {
   try {
     const userId = req.userId;
-    const { object, textNote, trackingId, fileName } = req.query;
+    const { trackingId } = req.params;
+    const { jobId } = req.query; // ✅ optional
+
+    console.log("User:", userId, "Tracking:", trackingId, "Job:", jobId);
+
+    if (!trackingId) {
+      return res.status(400).json({ message: "trackingId is required" });
+    }
+
+    let filter = {
+      userId: new mongoose.Types.ObjectId(userId),
+      trackingId,
+    };
+
+    // 🔥 OPTIONAL: same trackingId different jobs me ho to control
+    if (jobId) {
+      filter.jobId = jobId;
+    }
+
+    const result = await Detection.deleteMany(filter);
+
+    return res.json({
+      message: "Detections deleted successfully",
+      deletedCount: result.deletedCount,
+    });
+
+  } catch (err) {
+    console.error("deleteByTrackingId Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteMultiple = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { jobId } = req.query;
+    const trackingIds = req.body?.trackingIds || [];
 
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    let match = {
+    let filter = {
       userId: new mongoose.Types.ObjectId(userId),
     };
 
-    if (object)     match.object     = { $regex: object,     $options: "i" };
-    if (textNote)   match.textNote   = { $regex: textNote,   $options: "i" };
-    if (trackingId) match.trackingId = { $regex: trackingId, $options: "i" };
-    if (fileName)   match.fileName   = { $regex: fileName,   $options: "i" };
+    // 🔥 Case 1: delete by jobId
+    if (jobId) {
+      filter.jobId = jobId;
+    }
 
-    const results = await Detection.aggregate([
-      { $match: match },
+    // 🔥 Case 2: delete selected trackingIds
+    else if (trackingIds.length > 0) {
+      filter.trackingId = { $in: trackingIds };
+    }
+
+    // 🔥 Case 3: DELETE ALL (no extra condition needed)
+    // filter remains only userId
+
+    const result = await Detection.deleteMany(filter);
+
+    return res.json({
+      message: "Deleted successfully",
+      deletedCount: result.deletedCount,
+    });
+
+  } catch (err) {
+    console.error("Delete Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getJobStatus = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const userId = req.userId;
+    console.log("[getJobStatus] checking", { userId, jobId });
+
+    const job = await Detection.findOne({
+      jobId,
+      userId: new mongoose.Types.ObjectId(userId),
+        isJob: true, // 🔥 ADD THIS
+
+    });
+
+    if (!job) {
+      return res.json({ jobId, status: "not_found", results: [] });
+    }
+
+    let status = job.status;
+    let results = [];
+
+    // Batch parent job: aggregate all child jobs.
+    if (job.fileName === "__batch__") {
+      const childJobs = await Detection.find({
+        userId: new mongoose.Types.ObjectId(userId),
+        isJob: true,
+        jobId: { $regex: `^${jobId}__v` },
+      }).sort({ createdAt: 1 });
+
+      const allCompleted = childJobs.length > 0 && childJobs.every((j) => j.status === "completed");
+      const anyFailed = childJobs.some((j) => j.status === "failed");
+
+      if (allCompleted) {
+        status = "completed";
+        const childIds = childJobs.map((j) => j.jobId);
+        results = await Detection.find({
+          userId: new mongoose.Types.ObjectId(userId),
+          isJob: { $ne: true },
+          jobId: { $in: childIds },
+        }).sort({ createdAt: -1 });
+        await Detection.updateOne({ _id: job._id }, { $set: { status: "completed" } });
+      } else if (anyFailed) {
+        status = "failed";
+      } else {
+        status = "processing";
+      }
+    } else if (status === "completed") {
+      results = await Detection.find({
+        jobId,
+        userId: new mongoose.Types.ObjectId(userId),
+        isJob: { $ne: true },
+      }).sort({ createdAt: -1 });
+    }
+
+    const resultRows = addCommonPersonIds(
+      results.map((d) => ({
+        object: d.object,
+        ocrText: d.ocrText,
+        confidence: d.confidence,
+        trackingId: d.trackingId,
+        timestamp: d.timestamp,
+        image_path: d.imagePath,
+        bbox: d.bbox,
+        screenshotUrl: d.screenshotUrl,
+        color: d.color || "",
+      })),
+    );
+
+    return res.json({
+      jobId,
+      status,
+      total: resultRows.length,
+      totalCommonPersons: new Set(resultRows.map((r) => r.commonPersonId).filter(Boolean)).size,
+      results: resultRows,
+    });
+
+  } catch (err) {
+    console.error("Status Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getHistory = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const history = await Detection.aggregate([
+      {
+        $match: {
+          userId: new mongoose.Types.ObjectId(userId),
+          isJob: { $ne: true },
+        },
+      },
       { $sort: { createdAt: -1 } },
       {
         $group: {
-          _id: "$trackingId",
-          doc: { $first: "$$ROOT" },
+          _id: {
+            $ifNull: [
+              "$jobId",
+              { $concat: ["file_", { $ifNull: ["$fileName", "unknown"] }] },
+            ],
+          },
+          createdAt: { $max: "$createdAt" },
+          videoUrl: { $first: "$videoUrl" },
+          prompt: { $first: "$textNote" },
+          processingTime: { $first: "$processingTime" },
+          status: { $first: "$status" },
+          detections: {
+            $push: {
+              _id: "$_id",
+              object: "$object",
+              confidence: "$confidence",
+              trackingId: "$trackingId",
+              timestamp: "$timestamp",
+              image: "$screenshotUrl",
+              bbox: "$bbox",
+              color: "$color",
+            },
+          },
         },
       },
-      { $replaceRoot: { newRoot: "$doc" } },
       { $sort: { createdAt: -1 } },
     ]);
 
-    if (!results.length) {
-      return res.json({
-        message: "No results found",
-        counts: {},
-        totalUniqueObjects: 0,
-        results: [],
-      });
+    const formatted = history.map((item) => ({
+      _id: String(item._id),
+      videoUrl: item.videoUrl || "",
+      prompt: item.prompt || "",
+      processingTime: item.processingTime || "N/A",
+      status: item.status || "completed",
+      totalDetections: Array.isArray(item.detections) ? item.detections.length : 0,
+      detections: item.detections || [],
+      createdAt: item.createdAt,
+    }));
+
+    return res.json({ history: formatted });
+  } catch (err) {
+    console.error("getHistory Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteHistoryEntry = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { entryId } = req.params;
+
+    const result = await Detection.deleteMany({
+      userId: new mongoose.Types.ObjectId(userId),
+      isJob: { $ne: true },
+      $or: [{ jobId: entryId }, { _id: entryId }],
+    });
+
+    return res.json({ message: "History entry deleted", deletedCount: result.deletedCount });
+  } catch (err) {
+    console.error("deleteHistoryEntry Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteHistoryBatch = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+
+    if (!ids.length) {
+      return res.status(400).json({ message: "ids are required" });
     }
 
-    const searchPrompt = (object || textNote || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, "")
-      .trim();
-
-    return res.json({
-      message: "Success",
-      totalUniqueObjects: results.length,
-      counts: searchPrompt
-        ? {
-            [`total_${searchPrompt.replace(/\s+/g, "_")}`]: results.length,
-          }
-        : { total: results.length },
-      results: results.map((d) => ({
-        object:       d.object,
-        ocrText:      d.ocrText,
-        confidence:   d.confidence,
-        trackingId:   d.trackingId,
-        timestamp:    d.timestamp,
-        image_path:   d.imagePath,
-        bbox:         d.bbox,
-        color:        d.color,
-        screenshotUrl: d.screenshotUrl,
-        textNote:     d.textNote,
-        fileName:     d.fileName,
-        createdAt:    d.createdAt,
-      })),
+    const result = await Detection.deleteMany({
+      userId: new mongoose.Types.ObjectId(userId),
+      isJob: { $ne: true },
+      $or: [{ jobId: { $in: ids } }, { _id: { $in: ids } }],
     });
+
+    return res.json({ message: "History entries deleted", deletedCount: result.deletedCount });
   } catch (err) {
-    console.error("❌ searchDetections Error:", err);
+    console.error("deleteHistoryBatch Error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+exports.clearHistory = async (req, res) => {
+  try {
+    const userId = req.userId;
+    const result = await Detection.deleteMany({
+      userId: new mongoose.Types.ObjectId(userId),
+      isJob: { $ne: true },
+    });
+
+    return res.json({ message: "History cleared", deletedCount: result.deletedCount });
+  } catch (err) {
+    console.error("clearHistory Error:", err);
     return res.status(500).json({ error: err.message });
   }
 };

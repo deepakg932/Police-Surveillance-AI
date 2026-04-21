@@ -39,7 +39,7 @@ const app = express();
 const connectDB = require("./config/db");
 
 connectDB();
-
+app.use(express.json());
 app.use(cors());
 
 app.use("/detected_frames",
@@ -51,13 +51,17 @@ app.use(express.urlencoded({ limit: "500mb", extended: true }));
 const authRoute = require("./routes/authRoute.js");
 const videoRoutes = require("./routes/videoRoute");
 
+const filesDir = process.env.FILES_DIR || "public/files";
+app.use("/files", express.static(filesDir));
 // auth routes
 app.use("/api-auth", authRoute);
 app.use("/results", express.static(path.join(__dirname, "../ai-python/results")));
 
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+console.log(__dirname)
 // video routes
 app.use("/api/video", videoRoutes);
+app.use("/uploads", express.static("uploads"));
 
 // test
 app.get("/", (req, res) => {

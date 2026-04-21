@@ -3,26 +3,20 @@ const { JWT_SECRET } = require("../config");
 
 const authMiddleware = (req, res, next) => {
   try {
-    // let token = req.headers.authorization;
-        const token = req.headers.authorization?.split(" ")[1];
+    const authHeader = req.headers.authorization;
 
-    console.log("Raw token:", token);
-
-    if (!token) {
+    if (!authHeader) {
       return res.status(401).json({ message: "No token provided" });
     }
 
-    // 🔥 Bearer remove karo
-    if (token.startsWith("Bearer ")) {
-      token = token.split(" ")[1];
-    }
+    const token = authHeader.split(" ")[1]; // ✅ only once
 
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    console.log("Decoded user:", decoded);
-    req.userId = decoded.userId; 
+    console.log("Decoded:", decoded);
 
-    // req.userI = decoded;
+    // 🔥 IMPORTANT: check this
+    req.userId = decoded.userId || decoded.id; 
 
     next();
   } catch (err) {
