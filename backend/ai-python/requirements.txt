@@ -1,15 +1,27 @@
+# fastapi
+# uvicorn
+# ultralytics
+# opencv-python-headless
+# torch
+# torchvision
+# numpy
+# pillow
+# python-multipart
+# google-generativeai
+# python-dotenv
+
+
+
 fastapi
 uvicorn
 ultralytics
 opencv-python-headless
-numpy==1.26.4
+torch
+torchvision
+numpy
 pillow
 easyocr
 requests
 python-multipart
 python-dotenv
-
-deepface==0.0.99
-tensorflow==2.19.0
-tf-keras
-retina-face
+google-generativeai

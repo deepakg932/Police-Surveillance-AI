@@ -1,8 +1,6 @@
 FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
@@ -18,17 +16,12 @@ RUN apt-get update && apt-get install -y \
 
 COPY requirements.txt .
 
-RUN pip uninstall -y numpy || true
-RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir "numpy==1.26.4"
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
-
-RUN python -c "import numpy; print('FINAL NUMPY VERSION =', numpy.__version__)"
 
 COPY . .
 
-RUN mkdir -p /app/detected_frames
+RUN mkdir -p detected_frames
 
 EXPOSE 8000
 
