@@ -740,7 +740,7 @@ exports.getJobStatus = async (req, res) => {
       }).sort({ createdAt: -1 });
     }
 
-    const resultRows = addCommonPersonIds(
+    let resultRows = addCommonPersonIds(
       results.map((d) => ({
         object: d.object,
         ocrText: d.ocrText,
@@ -751,8 +751,29 @@ exports.getJobStatus = async (req, res) => {
         bbox: d.bbox,
         screenshotUrl: d.screenshotUrl,
         color: d.color || "",
+        fileName: d.fileName || "",
       })),
     );
+
+    // For multi-video batch jobs, return ONLY common persons/results.
+    if (job.fileName === "__batch__" && resultRows.length > 0) {
+      const commonById = resultRows.reduce((acc, row) => {
+        if (!row.commonPersonId) return acc;
+        if (!acc[row.commonPersonId]) {
+          acc[row.commonPersonId] = new Set();
+        }
+        acc[row.commonPersonId].add(row.fileName || "");
+        return acc;
+      }, {});
+
+      const commonIds = new Set(
+        Object.entries(commonById)
+          .filter(([, fileSet]) => fileSet.size > 1)
+          .map(([id]) => id),
+      );
+
+      resultRows = resultRows.filter((row) => commonIds.has(row.commonPersonId));
+    }
 
     return res.json({
       jobId,
