@@ -131,9 +131,19 @@ const WorkflowProgress = ({
           <div className="border border-blue-500/40 bg-blue-500/10 rounded-lg p-3 text-center text-white text-sm">
             {job.queryImagePreviewUrl ? (
               <div className="flex flex-col items-center gap-2">
-                <div className="flex items-center gap-2 text-blue-300">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Scanning Image
+                <div
+                  className={`flex items-center gap-2 ${
+                    isCompleted ? "text-green-400" : "text-blue-300"
+                  }`}
+                >
+                  {isCompleted ? (
+                    <>✓ Image Matched</>
+                  ) : (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Scanning Image
+                    </>
+                  )}
                 </div>
 
                 <img

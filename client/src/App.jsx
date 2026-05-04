@@ -305,7 +305,9 @@ function Dashboard() {
     setHasCurrentResults(false);
     setDetectionData({
       prompt: formInput.text || "",
-      queryImagePreviewUrl: formInput.image ? URL.createObjectURL(formInput.image) : "",
+      queryImagePreviewUrl: formInput.image
+        ? URL.createObjectURL(formInput.image)
+        : "",
       fileName: videoFile?.name || "CCTV_Footage.mp4",
       videoPreviewUrl: videoFile ? URL.createObjectURL(videoFile) : "",
       persons: [],
@@ -355,6 +357,9 @@ function Dashboard() {
 
           setDetectionData({
             prompt: formInput.text || "",
+            queryImagePreviewUrl: formInput.image
+              ? URL.createObjectURL(formInput.image)
+              : "",
             fileName: videoFile?.name || "CCTV_Footage.mp4",
             videoPreviewUrl: videoFile ? URL.createObjectURL(videoFile) : "",
             persons: transformedData.persons,
@@ -505,7 +510,9 @@ function Dashboard() {
       error: null,
       mode: null,
       prompt: formInput.text || "",
-      queryImagePreviewUrl: formInput.image ? URL.createObjectURL(formInput.image) : "",
+      queryImagePreviewUrl: formInput.image
+        ? URL.createObjectURL(formInput.image)
+        : "",
       fileName: selectedVideos?.[0]?.name || "Multiple Videos",
       videoPreviewUrl:
         selectedVideos && selectedVideos.length > 0
@@ -644,6 +651,9 @@ function Dashboard() {
 
           setDetectionData({
             prompt: formInput.text || "",
+            queryImagePreviewUrl: formInput.image
+              ? URL.createObjectURL(formInput.image)
+              : "",
             fileName:
               selectedVideos?.[selectedVideos.length - 1]?.name ||
               "Multiple Videos",
