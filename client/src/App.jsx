@@ -201,6 +201,24 @@ function Dashboard() {
         const updatedPersons = prev.persons.filter(
           (p) => p.trackingId !== trackingId,
         );
+        if (updatedPersons.length === 0) {
+          return {
+            persons: [],
+            liveResults: [],
+            stats: {
+              totalPersons: 0,
+              totalHelmet: 0,
+              totalVehicles: 0,
+              totalDetections: 0,
+              processingTime: "N/A",
+              filters: {},
+            },
+            loading: false,
+            error: null,
+            mode: null,
+          };
+        }
+
         return {
           ...prev,
           persons: updatedPersons,
@@ -279,6 +297,24 @@ function Dashboard() {
         const updatedPersons = prev.persons.filter(
           (p) => !successfulDeletes.includes(p.trackingId),
         );
+
+        if (updatedPersons.length === 0) {
+          return {
+            persons: [],
+            liveResults: [],
+            stats: {
+              totalPersons: 0,
+              totalHelmet: 0,
+              totalVehicles: 0,
+              totalDetections: 0,
+              processingTime: "N/A",
+              filters: {},
+            },
+            loading: false,
+            error: null,
+            mode: null,
+          };
+        }
         return {
           ...prev,
           persons: updatedPersons,

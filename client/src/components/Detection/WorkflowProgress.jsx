@@ -133,16 +133,22 @@ const WorkflowProgress = ({
               <div className="flex flex-col items-center gap-2">
                 <div
                   className={`flex items-center gap-2 ${
-                    isCompleted ? "text-green-400" : "text-blue-300"
+                    isCompleted
+                      ? "text-green-400"
+                      : isProcessing
+                        ? "text-blue-300"
+                        : "text-gray-300"
                   }`}
                 >
                   {isCompleted ? (
                     <>✓ Image Matched</>
-                  ) : (
+                  ) : isProcessing ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Scanning Image
                     </>
+                  ) : (
+                    <>Reference Image</>
                   )}
                 </div>
 
