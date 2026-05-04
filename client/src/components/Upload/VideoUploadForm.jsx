@@ -1,5 +1,5 @@
 // components/Upload/VideoUploadForm.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Upload, Video, Image, FileText, X, Send, Plus, Loader2 } from "lucide-react";
 import { useUpload } from "../contexts/UploadContext";
 
@@ -21,22 +21,26 @@ const VideoUploadForm = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Initialize from context or use defaults
-  const [mainVideo, setMainVideo] = useState(uploadData?.video || null);
+  const [mainVideos, setMainVideos] = useState(uploadData?.videos || (uploadData?.video ? [uploadData.video] : []));
   const [additionalImage, setAdditionalImage] = useState(uploadData?.image || null);
   const [additionalText, setAdditionalText] = useState(uploadData?.text || "");
   const [imagePreviewUrl, setImagePreviewUrl] = useState(uploadData?.imagePreviewUrl || null);
   const [activeTab, setActiveTab] = useState(uploadData?.activeTab || "video");
+  const [videoSelectMode, setVideoSelectMode] = useState(uploadData?.videoSelectMode || "multiple");
+  const videoInputRef = useRef(null);
 
   // Update context when local state changes
   useEffect(() => {
     updateUploadData({
-      video: mainVideo,
+      video: mainVideos[0] || null,
+      videos: mainVideos,
       image: additionalImage,
       text: additionalText,
       imagePreviewUrl,
-      activeTab
+      activeTab,
+      videoSelectMode,
     });
-  }, [mainVideo, additionalImage, additionalText, imagePreviewUrl, activeTab, updateUploadData]);
+  }, [mainVideos, additionalImage, additionalText, imagePreviewUrl, activeTab, videoSelectMode, updateUploadData]);
 
   // Clean up preview URL on unmount
   useEffect(() => {
@@ -48,9 +52,34 @@ const VideoUploadForm = ({
   }, [imagePreviewUrl]);
 
   const handleVideoSelect = (e) => {
-    const file = e.target.files[0];
-    if (file && file.type.startsWith("video/")) {
-      setMainVideo(file);
+    const files = Array.from(e.target.files || []).filter((file) =>
+      file.type.startsWith("video/")
+    );
+    if (files.length > 0) {
+      if (videoSelectMode === "single") {
+        setMainVideos([files[0]]);
+      } else {
+        setMainVideos((prev) => {
+          const merged = [...prev];
+          files.forEach((file) => {
+            const alreadyExists = merged.some(
+              (v) =>
+                v.name === file.name &&
+                v.size === file.size &&
+                v.lastModified === file.lastModified,
+            );
+            if (!alreadyExists) merged.push(file);
+          });
+          return merged.slice(0, 5);
+        });
+      }
+    }
+    e.target.value = "";
+  };
+
+  const openVideoPicker = () => {
+    if (videoInputRef.current) {
+      videoInputRef.current.click();
     }
   };
 
@@ -66,8 +95,12 @@ const VideoUploadForm = ({
     }
   };
 
-  const handleRemoveVideo = () => {
-    setMainVideo(null);
+  const handleRemoveVideo = (indexToRemove = null) => {
+    if (indexToRemove === null) {
+      setMainVideos([]);
+    } else {
+      setMainVideos((prev) => prev.filter((_, index) => index !== indexToRemove));
+    }
     const videoInput = document.getElementById("video-upload");
     if (videoInput) videoInput.value = "";
   };
@@ -100,8 +133,8 @@ const VideoUploadForm = ({
   };
 
   const handleMainSubmit = async () => {
-    if (!mainVideo) {
-      alert("Please select a video first");
+    if (!mainVideos.length) {
+      alert("Please select at least one video first");
       return;
     }
 
@@ -110,7 +143,8 @@ const VideoUploadForm = ({
 
     try {
       const formData = {
-        video: mainVideo,
+        videos: mainVideos,
+        video: mainVideos[0],
         ...(additionalImage && { image: additionalImage }),
         ...(additionalText && { text: additionalText }),
       };
@@ -122,7 +156,7 @@ const VideoUploadForm = ({
         await onSubmit(formData);
       }
       
-      completeUpload(mainVideo);
+      completeUpload(mainVideos);
     } catch (error) {
       console.error("Submission error:", error);
       failUpload(error.message);
@@ -136,11 +170,12 @@ const VideoUploadForm = ({
       URL.revokeObjectURL(imagePreviewUrl);
     }
     
-    setMainVideo(null);
+    setMainVideos([]);
     setAdditionalImage(null);
     setAdditionalText("");
     setImagePreviewUrl(null);
     setActiveTab("video");
+    setVideoSelectMode("multiple");
     setIsSubmitting(false);
     
     clearUploadData();
@@ -152,35 +187,71 @@ const VideoUploadForm = ({
   };
 
   const isSubmitDisabled = () => {
-    return !mainVideo || isUploading || isSubmitting;
+    return !mainVideos.length || isUploading || isSubmitting;
   };
 
   const renderVideoSection = () => (
     <div className="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center hover:border-blue-500 transition-colors">
+      <div className="mb-4 flex items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={() => setVideoSelectMode("single")}
+          className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+            videoSelectMode === "single"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+          }`}
+          disabled={isSubmitting || isUploading}
+        >
+          Single Video
+        </button>
+        <button
+          type="button"
+          onClick={() => setVideoSelectMode("multiple")}
+          className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+            videoSelectMode === "multiple"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+          }`}
+          disabled={isSubmitting || isUploading}
+        >
+          Multiple Videos
+        </button>
+      </div>
       <input
+        ref={videoInputRef}
         type="file"
         accept="video/*"
         onChange={handleVideoSelect}
         className="hidden"
         id="video-upload"
+        multiple={videoSelectMode === "multiple"}
       />
       <label htmlFor="video-upload" className="cursor-pointer">
         <Video className="h-16 w-16 text-gray-500 mx-auto mb-4" />
-        <p className="text-gray-300 mb-2">Click to upload main video</p>
-        <p className="text-sm text-gray-500">MP4, AVI, MOV (Max 2GB)</p>
+        <p className="text-gray-300 mb-2">
+          {videoSelectMode === "multiple"
+            ? "Click to upload one or more videos"
+            : "Click to upload a single video"}
+        </p>
+        <p className="text-sm text-gray-500">
+          {videoSelectMode === "multiple"
+            ? "MP4, AVI, MOV (Max 5 videos)"
+            : "MP4, AVI, MOV (Single file)"}
+        </p>
       </label>
     </div>
   );
 
   const renderSelectedVideo = () => {
-    if (!mainVideo) return null;
+    if (!mainVideos.length) return null;
 
     return (
       <div className="mt-4 p-4 bg-gray-700/30 rounded-lg">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-gray-400">Main Video:</span>
+          <span className="text-sm text-gray-400">Selected Videos: {mainVideos.length}</span>
           <button
-            onClick={handleRemoveVideo}
+            onClick={() => handleRemoveVideo(null)}
             className="p-1 hover:bg-gray-600 rounded-full transition-colors"
             type="button"
             disabled={isSubmitting || isUploading}
@@ -189,14 +260,54 @@ const VideoUploadForm = ({
           </button>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <Video className="h-12 w-12 text-blue-400" />
-          <div>
-            <p className="text-white text-sm">{mainVideo.name}</p>
-            <p className="text-xs text-gray-500">
-              {(mainVideo.size / (1024 * 1024)).toFixed(2)} MB
+        {videoSelectMode === "multiple" && mainVideos.length < 5 && (
+          <div className="mb-3">
+            <button
+              type="button"
+              onClick={openVideoPicker}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-blue-600/20 text-blue-300 hover:bg-blue-600/30 cursor-pointer transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              Add More Videos
+            </button>
+            <p className="text-xs text-gray-500 mt-1">
+              You can add up to 5 videos.
             </p>
           </div>
+        )}
+
+        <input
+          ref={videoInputRef}
+          type="file"
+          accept="video/*"
+          onChange={handleVideoSelect}
+          className="hidden"
+          id="video-upload-more"
+          multiple={videoSelectMode === "multiple"}
+        />
+
+        <div className="space-y-2 max-h-44 overflow-y-auto">
+          {mainVideos.map((video, index) => (
+            <div key={`${video.name}-${index}`} className="flex items-center justify-between space-x-3 bg-gray-800/40 p-2 rounded">
+              <div className="flex items-center space-x-3">
+                <Video className="h-8 w-8 text-blue-400" />
+                <div>
+                  <p className="text-white text-sm">{video.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {(video.size / (1024 * 1024)).toFixed(2)} MB
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => handleRemoveVideo(index)}
+                className="p-1 hover:bg-gray-600 rounded-full transition-colors"
+                type="button"
+                disabled={isSubmitting || isUploading}
+              >
+                <X className="h-4 w-4 text-gray-400" />
+              </button>
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -367,11 +478,11 @@ const VideoUploadForm = ({
           </p>
         </div>
 
-        {!mainVideo ? renderVideoSection() : renderSelectedVideo()}
+        {!mainVideos.length ? renderVideoSection() : renderSelectedVideo()}
 
-        {mainVideo && renderAdditionalContent()}
+        {mainVideos.length > 0 && renderAdditionalContent()}
 
-        {mainVideo && (
+        {mainVideos.length > 0 && (
           <div className="mt-8">
             <button
               onClick={handleMainSubmit}
@@ -392,7 +503,7 @@ const VideoUploadForm = ({
                 <>
                   <Send className="h-5 w-5" />
                   <span>
-                    Upload Video {additionalImage || additionalText ? "with Attachments" : ""}
+                    Upload {mainVideos.length} Video{mainVideos.length > 1 ? "s" : ""} {additionalImage || additionalText ? "with Attachments" : ""}
                   </span>
                 </>
               )}
@@ -422,7 +533,7 @@ const VideoUploadForm = ({
               ></div>
             </div>
             <p className="text-xs text-gray-500 mt-2 text-center">
-              Processing your video{additionalImage ? " and image" : ""}
+              Processing your video{mainVideos.length > 1 ? "s" : ""}{additionalImage ? " and image" : ""}
               {additionalText ? " and text" : ""}...
             </p>
           </div>

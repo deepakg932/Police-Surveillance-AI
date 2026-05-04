@@ -210,17 +210,12 @@ const LoginForm = ({ onLogin, isLoading, error, onSwitchToRegister }) => {
               </button>
             </p>
           </div>
-          {/* Demo Credentials */}
-          <div className="text-center">
-            <p className="text-xs text-gray-500">
-              Demo Credentials: admin@police.gov / password123
-            </p>
-          </div>
+        
         </form>
 
         {/* Footer */}
         <div className="text-center text-xs text-gray-600">
-          <p>© 2024 Police Surveillance System. All rights reserved.</p>
+          <p>© 2026 Police Surveillance System. All rights reserved.</p>
           <p className="mt-1">Authorized personnel only</p>
         </div>
       </div>

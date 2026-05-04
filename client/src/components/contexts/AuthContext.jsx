@@ -273,12 +273,11 @@ export const AuthProvider = ({ children }) => {
         return response;
       } catch (error) {
         // Handle network errors
-        if (error.name === "TypeError" && error.message === "Failed to fetch") {
+        if (error.name === "TypeError" && error.message === "Failed to login") {
           throw new Error(
             "Network error. Please check your internet connection.",
           );
         }
-
         // Re-throw the error
         throw error;
       }

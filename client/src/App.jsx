@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import WorkflowProgress from "./components/Detection/WorkflowProgress";
 import {
   BrowserRouter as Router,
   Routes,
@@ -33,6 +34,7 @@ function Dashboard() {
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
   const [detectionData, setDetectionData] = useState({
     persons: [],
+    liveResults: [],
     stats: {
       totalPersons: 0,
       totalHelmet: 0,
@@ -48,29 +50,21 @@ function Dashboard() {
   const [viewingHistoryEntry, setViewingHistoryEntry] = useState(null);
   const [currentJobId, setCurrentJobId] = useState(null);
   const [jobPolling, setJobPolling] = useState(false);
-  const [hasCurrentResults, setHasCurrentResults] = useState(false); // Track if we have results from current upload
+  const [hasCurrentResults, setHasCurrentResults] = useState(false);
   const { logout, user, authFetch } = useAuth();
   const { isUploading, uploadProgress, resetUpload } = useUpload();
-  const { addToHistory, uploadHistory } = useHistory();
-
-  // REMOVE this useEffect - we don't want to auto-fetch when switching to current tab
-  // useEffect(() => {
-  //   if (activeTab === "current") {
-  //     fetchDetectionData();
-  //   }
-  // }, [activeTab]);
-
-  const handleTabChange = (tabId) => {
+  const { uploadHistory, refreshHistory } = useHistory();
+  const handleTabChange = async (tabId) => {
     setActiveTab(tabId);
-    // Clear history view when switching away
+
     if (tabId !== "history-view") {
       setViewingHistoryEntry(null);
     }
+
+    if (tabId === "history") {
+      await refreshHistory();
+    }
   };
-
-  // Remove fetchDetectionData function entirely since we don't need it
-  // Keep it commented or delete it
-
   const transformApiData = (apiData) => {
     console.log("Raw API data:", apiData);
 
@@ -113,6 +107,7 @@ function Dashboard() {
           vehicle: hasVehicle,
           person: hasPerson,
           confidencePercentage: confidencePercentage,
+          confidence: item.confidence,
           thumbnail: imageUrl,
           image_path: item.image_path,
           screenshotUrl: item.screenshotUrl,
@@ -120,6 +115,7 @@ function Dashboard() {
           timestamp: item.timestamp,
           fullImageUrl: imageUrl,
           processing_time: item.processing_time,
+          ocrText: item.ocrText,
           ...item,
         };
       });
@@ -129,6 +125,11 @@ function Dashboard() {
         totalHelmet: apiData.totalHelmet || 0,
         totalVehicles: apiData.totalVehicles || 0,
         totalDetections: apiData.totalDetections || persons.length,
+        totalCommonPersons:
+          typeof apiData.totalCommonPersons === "number"
+            ? apiData.totalCommonPersons
+            : new Set(persons.map((p) => p.commonPersonId).filter(Boolean))
+                .size,
         processingTime:
           apiData.processing_time ||
           apiData.results[0]?.processing_time ||
@@ -146,18 +147,169 @@ function Dashboard() {
         totalHelmet: apiData.totalHelmet || 0,
         totalVehicles: apiData.totalVehicles || 0,
         totalDetections: apiData.totalDetections || 0,
+        totalCommonPersons: apiData.totalCommonPersons || 0,
         processingTime: apiData.processing_time || "N/A",
         filters: apiData.filters || {},
       },
     };
   };
 
+  // Function to refresh current detection data
+  const refreshCurrentDetectionData = async () => {
+    if (currentJobId) {
+      // If we have a job ID, refetch its status
+      try {
+        const response = await authFetch(
+          `${API_BASE_URL}/video/status/${currentJobId}`,
+        );
+        if (response.ok) {
+          const statusData = await response.json();
+          if (statusData.status === "completed" && statusData.results) {
+            const transformedData = transformApiData({
+              results: statusData.results,
+              processing_time: statusData.processing_time || "N/A",
+            });
+            setDetectionData({
+              persons: transformedData.persons,
+              stats: transformedData.stats,
+              loading: false,
+              error: null,
+              mode: detectionData.mode,
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error refreshing detection data:", error);
+      }
+    }
+  };
+
+  // Delete detection handlers
+  // Delete detection handlers - FIXED VERSION
+  const handleDeleteSingleDetection = async (trackingId) => {
+    if (!trackingId) return false;
+    try {
+      // ✅ currentJobId bhi bhejo
+      const url = currentJobId
+        ? `${API_BASE_URL}/video/delete/${trackingId}?jobId=${currentJobId}`
+        : `${API_BASE_URL}/video/delete/${trackingId}`;
+
+      const response = await authFetch(url, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed: ${response.status}`);
+
+      setDetectionData((prev) => {
+        const updatedPersons = prev.persons.filter(
+          (p) => p.trackingId !== trackingId,
+        );
+        return {
+          ...prev,
+          persons: updatedPersons,
+          stats: { ...prev.stats, totalDetections: updatedPersons.length },
+        };
+      });
+
+      toast.success("Detection deleted");
+      return true;
+    } catch (error) {
+      toast.error(`Failed to delete: ${error.message}`);
+      return false;
+    }
+  };
+
+  // Add a new handler for delete all that clears everything
+  const handleDeleteAllDetections = async () => {
+    try {
+      // ✅ currentJobId bhejo — sirf current job/batch ki detections delete hongi
+      const url = currentJobId
+        ? `${API_BASE_URL}/video/deleteall?jobId=${currentJobId}`
+        : `${API_BASE_URL}/video/deleteall`;
+
+      const response = await authFetch(url, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed: ${response.status}`);
+
+      setDetectionData({
+        persons: [],
+        liveResults: [],
+        stats: {
+          totalPersons: 0,
+          totalHelmet: 0,
+          totalVehicles: 0,
+          totalDetections: 0,
+          processingTime: "N/A",
+          filters: {},
+        },
+        loading: false,
+        error: null,
+        mode: null,
+      });
+
+      toast.success("All detections deleted");
+      return true;
+    } catch (error) {
+      toast.error(`Failed: ${error.message}`);
+      return false;
+    }
+  };
+
+  const handleDeleteDetections = async (trackingIds) => {
+    if (!trackingIds || trackingIds.length === 0) return false;
+
+    let successCount = 0;
+    const successfulDeletes = [];
+
+    for (const trackingId of trackingIds) {
+      try {
+        // ✅ currentJobId bhi bhejo
+        const url = currentJobId
+          ? `${API_BASE_URL}/video/delete/${trackingId}?jobId=${currentJobId}`
+          : `${API_BASE_URL}/video/delete/${trackingId}`;
+
+        const response = await authFetch(url, { method: "DELETE" });
+        if (response.ok) {
+          successCount++;
+          successfulDeletes.push(trackingId);
+        }
+      } catch (error) {
+        console.error(`Error deleting ${trackingId}:`, error);
+      }
+    }
+
+    if (successCount > 0) {
+      setDetectionData((prev) => {
+        const updatedPersons = prev.persons.filter(
+          (p) => !successfulDeletes.includes(p.trackingId),
+        );
+        return {
+          ...prev,
+          persons: updatedPersons,
+          stats: { ...prev.stats, totalDetections: updatedPersons.length },
+        };
+      });
+      toast.success(`Deleted ${successCount} detections`);
+      return true;
+    }
+    return false;
+  };
+
+  useEffect(() => {
+    return () => {
+      if (detectionData.videoPreviewUrl) {
+        URL.revokeObjectURL(detectionData.videoPreviewUrl);
+      }
+    };
+  }, [detectionData.videoPreviewUrl]);
+
   const pollJobStatus = async (jobId, videoFile, formInput) => {
     setJobPolling(true);
     setCurrentJobId(jobId);
-    setHasCurrentResults(false); // Reset current results flag
+    setHasCurrentResults(false);
     setDetectionData({
+      prompt: formInput.text || "",
+      queryImagePreviewUrl: formInput.image ? URL.createObjectURL(formInput.image) : "",
+      fileName: videoFile?.name || "CCTV_Footage.mp4",
+      videoPreviewUrl: videoFile ? URL.createObjectURL(videoFile) : "",
       persons: [],
+      liveResults: [],
       stats: {
         totalPersons: 0,
         totalHelmet: 0,
@@ -171,9 +323,7 @@ function Dashboard() {
       mode: null,
     });
 
-    const pollingToast = toast.loading("Video is processing...");
-
-    const maxAttempts = 720; // 720 * 5 sec = 60 min
+    const maxAttempts = 1440; // 2 hours with 5s polling interval
     let attempts = 0;
 
     const interval = setInterval(async () => {
@@ -193,45 +343,32 @@ function Dashboard() {
 
         if (statusData.status === "completed") {
           clearInterval(interval);
-          toast.dismiss(pollingToast);
 
           const transformedData = transformApiData({
             results: statusData.results || [],
-            processing_time: statusData.processingTime || "N/A",
+            processing_time: statusData.processing_time || "N/A",
             mode: formInput.text ? "Text Search" : "Video Upload",
             totalDetections: statusData.totalResults || 0,
           });
 
-          // Add to history
-          addToHistory({
-            videoName: videoFile.name,
-            videoFile: videoFile,
-            prompt: formInput.text,
-            image: formInput.image,
-            text: formInput.text,
-            results: transformedData.persons,
-            stats: transformedData.stats,
-            processingTime: statusData.processingTime || "N/A",
-            mode: formInput.text ? "Text Search" : "Video Upload",
-            thumbnail:
-              transformedData.persons[0]?.screenshotUrl ||
-              transformedData.persons[0]?.thumbnail,
-            timestamp: new Date().toISOString(),
-          });
+          await refreshHistory();
 
-          // Set current detection data
           setDetectionData({
+            prompt: formInput.text || "",
+            fileName: videoFile?.name || "CCTV_Footage.mp4",
+            videoPreviewUrl: videoFile ? URL.createObjectURL(videoFile) : "",
             persons: transformedData.persons,
             stats: transformedData.stats,
+            liveResults: [],
             loading: false,
             error: null,
             mode: formInput.text ? "Text Search" : "Video Upload",
           });
 
-          setHasCurrentResults(true); // Mark that we have current results
+          setHasCurrentResults(true);
           setJobPolling(false);
           setCurrentJobId(null);
-          setActiveTab("current"); // Switch to current tab only after results are ready
+          setActiveTab("current");
 
           toast.success(
             `✅ Processing complete! Found ${transformedData.persons.length} detection${transformedData.persons.length !== 1 ? "s" : ""}.`,
@@ -241,10 +378,10 @@ function Dashboard() {
 
         if (statusData.status === "failed") {
           clearInterval(interval);
-          toast.dismiss(pollingToast);
 
           setDetectionData({
             persons: [],
+            liveResults: [],
             stats: {
               totalPersons: 0,
               totalHelmet: 0,
@@ -258,6 +395,7 @@ function Dashboard() {
             mode: null,
           });
           setJobPolling(false);
+          setActiveTab("upload");
           setCurrentJobId(null);
           setHasCurrentResults(false);
 
@@ -267,10 +405,16 @@ function Dashboard() {
           return;
         }
 
-        // Update loading state to show processing
         if (statusData.status === "processing") {
+          const transformedData = transformApiData({
+            results: statusData.results || [],
+            processing_time: statusData.processing_time || "N/A",
+            totalDetections: statusData.total || 0,
+          });
+
           setDetectionData((prev) => ({
             ...prev,
+            liveResults: transformedData.persons,
             loading: true,
             error: null,
           }));
@@ -278,10 +422,10 @@ function Dashboard() {
 
         if (attempts >= maxAttempts) {
           clearInterval(interval);
-          toast.dismiss(pollingToast);
 
           setDetectionData({
             persons: [],
+            liveResults: [],
             stats: {
               totalPersons: 0,
               totalHelmet: 0,
@@ -297,7 +441,7 @@ function Dashboard() {
           setJobPolling(false);
           setCurrentJobId(null);
           setHasCurrentResults(false);
-
+          setActiveTab("upload");
           toast.error(
             "Processing is taking too long. Please check again later.",
           );
@@ -305,10 +449,244 @@ function Dashboard() {
       } catch (error) {
         console.error("Polling error:", error);
         clearInterval(interval);
-        toast.dismiss(pollingToast);
+
+        try {
+          await authFetch(`${API_BASE_URL}/video/status/${jobId}/fail`, {
+            method: "POST",
+          });
+
+          await refreshHistory();
+        } catch (failErr) {
+          console.error("Failed to mark failed:", failErr);
+        }
 
         setDetectionData({
           persons: [],
+          liveResults: [],
+          stats: {
+            totalPersons: 0,
+            totalHelmet: 0,
+            totalVehicles: 0,
+            totalDetections: 0,
+            processingTime: "N/A",
+            filters: {},
+          },
+          loading: false,
+          error: error.message,
+          mode: null,
+        });
+
+        setJobPolling(false);
+        setCurrentJobId(null);
+        setHasCurrentResults(false);
+        setActiveTab("history"); // ✅ direct history me failed status dikhega
+
+        toast.error(`Processing failed: ${error.message}`);
+      }
+    }, 5000);
+  };
+
+  const pollBatchStatus = async (batchId, formInput, selectedVideos = []) => {
+    setJobPolling(true);
+    setCurrentJobId(batchId);
+    setHasCurrentResults(false);
+    setDetectionData({
+      persons: [],
+      liveResults: [],
+      stats: {
+        totalPersons: 0,
+        totalHelmet: 0,
+        totalVehicles: 0,
+        totalDetections: 0,
+        processingTime: "N/A",
+        filters: {},
+      },
+      loading: true,
+      error: null,
+      mode: null,
+      prompt: formInput.text || "",
+      queryImagePreviewUrl: formInput.image ? URL.createObjectURL(formInput.image) : "",
+      fileName: selectedVideos?.[0]?.name || "Multiple Videos",
+      videoPreviewUrl:
+        selectedVideos && selectedVideos.length > 0
+          ? URL.createObjectURL(selectedVideos[0])
+          : "",
+      videoList: selectedVideos || [],
+      currentVideoIndex: 0,
+      currentVideoFile: selectedVideos?.[0] || null,
+    });
+
+    const maxAttempts = 1440;
+    let attempts = 0;
+
+    const interval = setInterval(async () => {
+      attempts += 1;
+
+      try {
+        // ✅ Batch status check — single video jaisa hi
+        const response = await authFetch(
+          `${API_BASE_URL}/video/batch/${batchId}`,
+        );
+
+        if (!response.ok) {
+          throw new Error(`Batch status check failed: ${response.status}`);
+        }
+
+        const statusData = await response.json();
+        console.log("Batch status:", statusData);
+
+        // 🔥 LIVE RESULTS DURING PROCESSING (MULTI VIDEO)
+        if (statusData.status === "processing") {
+          const transformedData = transformApiData({
+            results: statusData.results || [],
+            processing_time: statusData.processing_time || "N/A",
+            totalDetections: statusData.totalResults || 0,
+          });
+
+          setDetectionData((prev) => ({
+            ...prev,
+            liveResults: transformedData.persons,
+            loading: true,
+            error: null,
+          }));
+        }
+        // Progress dikhao — kitni videos complete hui
+        if (statusData.totalVideos > 0) {
+          const completedCount = Number(statusData.completed || 0);
+          const totalVideos = Number(
+            statusData.totalVideos || selectedVideos.length,
+          );
+
+          const runningIndex = statusData.jobs?.findIndex(
+            (j) => j.status === "processing",
+          );
+
+          const currentVideoIndex =
+            runningIndex >= 0
+              ? runningIndex
+              : Math.min(completedCount, selectedVideos.length - 1);
+
+          const currentVideoFile = selectedVideos[currentVideoIndex];
+
+          const progressMsg = `Processing video ${currentVideoIndex + 1}/${totalVideos} — completed ${completedCount}/${totalVideos}`;
+
+          setDetectionData((prev) => ({
+            ...prev,
+            loading: true,
+            error: null,
+            progressMsg,
+            currentVideoIndex,
+            currentVideoFile,
+            fileName:
+              currentVideoFile?.name || `Video ${currentVideoIndex + 1}`,
+            videoPreviewUrl: currentVideoFile
+              ? URL.createObjectURL(currentVideoFile)
+              : "",
+            videoList: selectedVideos,
+          }));
+        }
+
+        if (
+          statusData.status === "failed" ||
+          (statusData.failed > 0 && statusData.completed === 0)
+        ) {
+          clearInterval(interval);
+
+          await refreshHistory();
+
+          setDetectionData({
+            persons: [],
+            liveResults: [],
+            stats: {
+              totalPersons: 0,
+              totalHelmet: 0,
+              totalVehicles: 0,
+              totalDetections: 0,
+              processingTime: "N/A",
+              filters: {},
+            },
+            loading: false,
+            error:
+              statusData.errorMessage ||
+              "Python server unreachable / network failed",
+            mode: null,
+          });
+
+          setJobPolling(false);
+          setCurrentJobId(null);
+          setHasCurrentResults(false);
+
+          setActiveTab("upload");
+
+          toast.error(
+            `Processing failed: ${
+              statusData.errorMessage ||
+              "Python server unreachable / network failed"
+            }`,
+          );
+
+          return;
+        }
+
+        // ✅ Sab videos complete
+        if (statusData.isAllDone || statusData.status === "completed") {
+          clearInterval(interval);
+
+          // Single video jaisa hi transform karo
+          const transformedData = transformApiData({
+            results: statusData.results || [],
+            processing_time: statusData.processing_time || "N/A",
+            mode: formInput.text ? "Text Search" : "Video Upload",
+            totalDetections: statusData.totalResults || 0,
+          });
+
+          await refreshHistory();
+
+          setDetectionData({
+            prompt: formInput.text || "",
+            fileName:
+              selectedVideos?.[selectedVideos.length - 1]?.name ||
+              "Multiple Videos",
+            videoPreviewUrl:
+              selectedVideos?.length > 0
+                ? URL.createObjectURL(selectedVideos[selectedVideos.length - 1])
+                : "",
+            videoList: selectedVideos || [],
+            currentVideoIndex: selectedVideos.length - 1,
+            currentVideoFile:
+              selectedVideos?.[selectedVideos.length - 1] || null,
+            progressMsg: `Processing... ${selectedVideos.length}/${selectedVideos.length} videos done`,
+            persons: transformedData.persons,
+            stats: transformedData.stats,
+            loading: false,
+            liveResults: [],
+            error: null,
+            mode: formInput.text ? "Text Search" : "Video Upload",
+          });
+
+          setHasCurrentResults(true);
+          setJobPolling(false);
+          setCurrentJobId(null);
+          setActiveTab("current");
+
+          toast.success(
+            `✅ Sab videos process ho gaye! ${transformedData.persons.length} detection${transformedData.persons.length !== 1 ? "s" : ""} mili.`,
+          );
+          return;
+        }
+
+        if (attempts >= maxAttempts) {
+          clearInterval(interval);
+          setJobPolling(false);
+          setCurrentJobId(null);
+          toast.error("Processing timeout ho gaya");
+        }
+      } catch (error) {
+        console.error("Batch polling error:", error);
+        clearInterval(interval);
+        setDetectionData({
+          persons: [],
+          liveResults: [],
           stats: {
             totalPersons: 0,
             totalHelmet: 0,
@@ -323,8 +701,6 @@ function Dashboard() {
         });
         setJobPolling(false);
         setCurrentJobId(null);
-        setHasCurrentResults(false);
-
         toast.error(`Polling failed: ${error.message}`);
       }
     }, 5000);
@@ -332,31 +708,50 @@ function Dashboard() {
 
   const handleSubmit = async (data) => {
     console.log("Submitting:", data);
-
     let uploadingToast = null;
 
     try {
-      const videoFile = data.file || data.video;
+      const selectedVideos = Array.isArray(data.videos)
+        ? data.videos
+        : [data.file || data.video].filter(Boolean);
 
-      if (!videoFile) {
+      if (!selectedVideos.length) {
         toast.error("No video file selected");
         return;
       }
 
       const formData = new FormData();
-      formData.append("file", videoFile, videoFile.name);
+      const isMulti = selectedVideos.length > 1;
+
+      if (isMulti) {
+        // ✅ Multi video — "files" key se bhejo
+        selectedVideos.forEach((videoFile) => {
+          formData.append("files", videoFile, videoFile.name);
+        });
+      } else {
+        // ✅ Single video — "file" key se bhejo (same as before)
+        formData.append("file", selectedVideos[0], selectedVideos[0].name);
+      }
 
       if (data.image) {
         formData.append("image", data.image, data.image.name);
       }
-
       if (data.text) {
         formData.append("text", data.text);
       }
 
-      uploadingToast = toast.loading("Uploading video...");
+      uploadingToast = toast.loading(
+        isMulti
+          ? `Uploading ${selectedVideos.length} videos...`
+          : "Uploading video...",
+      );
 
-      const response = await authFetch(`${API_BASE_URL}/video/upload`, {
+      // ✅ Single ya Multi — alag endpoint
+      const endpoint = isMulti
+        ? `${API_BASE_URL}/video/upload/multi`
+        : `${API_BASE_URL}/video/upload`;
+
+      const response = await authFetch(endpoint, {
         method: "POST",
         body: formData,
       });
@@ -370,39 +765,29 @@ function Dashboard() {
       console.log("Upload response:", result);
 
       toast.dismiss(uploadingToast);
+      resetUpload();
 
-      // RESET THE UPLOAD FORM IMMEDIATELY AFTER SUCCESSFUL UPLOAD
-      resetUpload(); // This clears all form data in UploadContext
-
-      if (result.jobId) {
+      // ✅ Single video → jobId se poll karo (same as before)
+      if (result.jobId && !result.batchId) {
         toast.success("Upload successful. Processing started.");
-        // Switch to current tab immediately to show processing state
         setActiveTab("current");
-        // Start polling with jobId
-        pollJobStatus(result.jobId, videoFile, data);
+        pollJobStatus(result.jobId, selectedVideos[0], data);
         return;
       }
 
-      // fallback: old sync backend still returning final results
+      // ✅ Multi video → batchId se poll karo
+      if (result.batchId) {
+        toast.success(
+          `${selectedVideos.length} videos upload ho gaye. Processing shuru...`,
+        );
+        setActiveTab("current");
+        pollBatchStatus(result.batchId, data, selectedVideos); // ← naya function
+        return;
+      }
+
+      // Fallback (agar seedha results aaye)
       const transformedData = transformApiData(result);
-
-      addToHistory({
-        videoName: videoFile.name,
-        videoFile: videoFile,
-        prompt: data.text,
-        image: data.image,
-        text: data.text,
-        results: transformedData.persons,
-        stats: transformedData.stats,
-        processingTime:
-          result.processing_time || transformedData.stats.processingTime,
-        mode: result.mode,
-        thumbnail:
-          transformedData.persons[0]?.screenshotUrl ||
-          transformedData.persons[0]?.thumbnail,
-        timestamp: new Date().toISOString(),
-      });
-
+      await refreshHistory();
       setDetectionData({
         persons: transformedData.persons,
         stats: transformedData.stats,
@@ -410,11 +795,8 @@ function Dashboard() {
         error: null,
         mode: result.mode,
       });
-
       setHasCurrentResults(true);
       setActiveTab("current");
-
-      toast.success("Upload complete.");
     } catch (error) {
       console.error("Upload failed:", error);
       if (uploadingToast) toast.dismiss(uploadingToast);
@@ -471,9 +853,53 @@ function Dashboard() {
     setActiveTab("history-view");
   };
 
-  const handleBackToCurrent = () => {
+  const handleDeleteHistoryViewSingleDetection = async (trackingId) => {
+    if (!trackingId || !viewingHistoryEntry?.id) return false;
+    try {
+      const response = await authFetch(
+        `${API_BASE_URL}/video/delete/${trackingId}?jobId=${encodeURIComponent(viewingHistoryEntry.id)}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        throw new Error(`Delete failed: ${response.status}`);
+      }
+
+      setViewingHistoryEntry((prev) => {
+        if (!prev) return prev;
+        const updatedResults = (prev.results || []).filter(
+          (item) => item.trackingId !== trackingId,
+        );
+        return {
+          ...prev,
+          results: updatedResults,
+          stats: {
+            ...(prev.stats || {}),
+            totalDetections: updatedResults.length,
+          },
+        };
+      });
+      await refreshHistory();
+      toast.success(`Deleted detection ${trackingId}`);
+      return true;
+    } catch (error) {
+      toast.error(`Failed to delete: ${error.message}`);
+      return false;
+    }
+  };
+
+  const handleDeleteHistoryViewDetections = async (trackingIds = []) => {
+    if (!trackingIds.length || !viewingHistoryEntry?.id) return false;
+    let successCount = 0;
+    for (const trackingId of trackingIds) {
+      const ok = await handleDeleteHistoryViewSingleDetection(trackingId);
+      if (ok) successCount += 1;
+    }
+    return successCount > 0;
+  };
+
+  const handleBackToHistory = () => {
     setViewingHistoryEntry(null);
-    setActiveTab("current");
+    setActiveTab("history");
   };
 
   const renderContent = () => {
@@ -484,133 +910,65 @@ function Dashboard() {
       case "current":
         return (
           <div className="space-y-6">
-            {/* ONLY CURRENT RESULTS - NO HISTORY HERE */}
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-2">
-                  <div className="w-1 h-6 bg-blue-500 rounded-full"></div>
-                  <h2 className="text-xl font-bold text-white">
-                    Current Detection Results
-                  </h2>
-                  {detectionData.persons.length > 0 && (
-                    <span className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded-full text-xs">
-                      {detectionData.persons.length} items
-                    </span>
-                  )}
-                </div>
+            <WorkflowProgress
+              job={{
+                jobId: currentJobId,
+                fileName: detectionData.fileName || "CCTV_Footage.mp4",
+                textNote: detectionData.prompt || "",
+                queryImagePreviewUrl: detectionData.queryImagePreviewUrl || "",
+                videoPreviewUrl: detectionData.videoPreviewUrl || "",
+                videoList: detectionData.videoList || [],
+                currentVideoIndex: detectionData.currentVideoIndex || 0,
+                currentVideoFile: detectionData.currentVideoFile || null,
+                progressMsg: detectionData.progressMsg || "",
+                status: jobPolling
+                  ? "processing"
+                  : detectionData.error
+                    ? "failed"
+                    : detectionData.persons.length > 0
+                      ? "completed"
+                      : "idle",
+              }}
+              results={
+                jobPolling
+                  ? detectionData.liveResults || []
+                  : detectionData.persons || []
+              }
+              status={
+                jobPolling
+                  ? "processing"
+                  : detectionData.error
+                    ? "failed"
+                    : detectionData.persons.length > 0
+                      ? "completed"
+                      : "idle"
+              }
+            />
 
-                {/* Save to History Button - Only shows when there are results */}
-                {detectionData.persons.length > 0 && (
-                  <button
-                    onClick={() => {
-                      addToHistory({
-                        videoName: `Manual Save - ${new Date().toLocaleString()}`,
-                        results: detectionData.persons,
-                        stats: detectionData.stats,
-                        mode: detectionData.mode,
-                        thumbnail: detectionData.persons[0]?.thumbnail,
-                        timestamp: new Date().toISOString(),
-                      });
-                      toast.success("Results saved to history");
-                    }}
-                    className="px-3 py-1.5 bg-purple-500/20 text-purple-400 rounded-lg hover:bg-purple-500/30 text-sm flex items-center space-x-1"
-                  >
-                    <svg
-                      className="h-4 w-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
-                      />
-                    </svg>
-                    <span>Save to History</span>
-                  </button>
-                )}
-              </div>
+            {!jobPolling && detectionData.persons.length > 0 && (
+              <>
+                <DetectionStats
+                  stats={detectionData.stats}
+                  mode={detectionData.mode}
+                />
 
-              {jobPolling && detectionData.persons.length === 0 && (
-                <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-6 text-center">
-                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mb-4"></div>
-                  <p className="text-blue-400 font-medium">
-                    Processing video in background...
-                  </p>
-                  <p className="text-sm text-gray-400 mt-2">
-                    Job ID: {currentJobId}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    This may take a few minutes depending on video length
-                  </p>
-                </div>
-              )}
-
-              {detectionData.loading &&
-                !jobPolling &&
-                detectionData.persons.length === 0 && (
-                  <div className="text-center py-12 bg-gray-800/50 rounded-xl border border-gray-700">
-                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-                    <p className="text-gray-400 mt-4">
-                      Loading detection data...
-                    </p>
-                  </div>
-                )}
-
-              {detectionData.error && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-center">
-                  <p className="text-red-400">Error: {detectionData.error}</p>
-                </div>
-              )}
-
-              {!detectionData.loading &&
-                !jobPolling &&
-                detectionData.persons.length === 0 &&
-                !detectionData.error && (
-                  <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-12 text-center">
-                    <svg
-                      className="w-16 h-16 mx-auto text-gray-600 mb-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                      />
-                    </svg>
-                    <h3 className="text-xl font-medium text-gray-300 mb-2">
-                      No Current Detections
-                    </h3>
-                    <p className="text-gray-500">
-                      Upload a video to see results here
-                    </p>
-                  </div>
-                )}
-
-              {detectionData.persons.length > 0 && (
-                <>
-                  <DetectionStats
-                    stats={detectionData.stats}
-                    mode={detectionData.mode}
-                  />
-                  <div className="mt-6">
-                    <DetectedPersonsTable persons={detectionData.persons} />
-                  </div>
-                </>
-              )}
-            </div>
+                <DetectedPersonsTable
+                  persons={detectionData.persons}
+                  onDeleteSingleDetection={handleDeleteSingleDetection}
+                  onDeleteDetections={handleDeleteDetections}
+                  onDeleteAllDetections={handleDeleteAllDetections}
+                  onDeleteComplete={refreshCurrentDetectionData}
+                  apiBaseUrl={API_BASE_URL}
+                  authFetch={authFetch}
+                />
+              </>
+            )}
           </div>
         );
 
       case "history":
         return (
           <div className="space-y-6">
-            {/* ONLY HISTORY - NO CURRENT RESULTS HERE */}
             <div>
               <div className="flex items-center mb-4">
                 <div className="w-1 h-6 bg-purple-500 rounded-full mr-2"></div>
@@ -630,7 +988,7 @@ function Dashboard() {
         return (
           <div className="space-y-6">
             <button
-              onClick={handleBackToCurrent}
+              onClick={handleBackToHistory}
               className="mb-4 px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600 flex items-center space-x-2"
             >
               <svg
@@ -646,7 +1004,7 @@ function Dashboard() {
                   d="M10 19l-7-7m0 0l7-7m-7 7h18"
                 />
               </svg>
-              <span>Back to Current Results</span>
+              <span>Back to History</span>
             </button>
 
             {viewingHistoryEntry && (
@@ -677,7 +1035,26 @@ function Dashboard() {
                 />
 
                 <DetectedPersonsTable
-                  persons={viewingHistoryEntry.results || []}
+                  persons={(viewingHistoryEntry.results || []).map((r) => ({
+                    ...r,
+                    processingTime:
+                      r.processingTime ||
+                      r.processing_time ||
+                      viewingHistoryEntry.processing_time ||
+                      "N/A",
+                    processing_time:
+                      r.processing_time ||
+                      r.processingTime ||
+                      viewingHistoryEntry.processing_time ||
+                      "N/A",
+                  }))}
+                  // persons={viewingHistoryEntry.results || []}
+                  onDeleteSingleDetection={
+                    handleDeleteHistoryViewSingleDetection
+                  }
+                  onDeleteDetections={handleDeleteHistoryViewDetections}
+                  apiBaseUrl={API_BASE_URL}
+                  authFetch={authFetch}
                 />
               </div>
             )}

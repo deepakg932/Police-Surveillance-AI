@@ -87,7 +87,7 @@ const login = async (req, res) => {
     );
 
     return res.json({
-      message: "Login successful",
+      message: "Login successful 🌟",
       
       user: {
         // id: user._id,

@@ -20,10 +20,36 @@ const detectionSchema = new mongoose.Schema({
     index: true,
   },
 
+  batchId: {
+  type: String,
+  index: true,
+  default: "",
+},
+
+isBatch: {
+  type: Boolean,
+  default: false,
+  index: true,
+},
+
+mode: {
+  type: String,
+  default: "",
+},
+
+errorMessage: {
+  type: String,
+  default: "",
+},
+
   fileName: {
     type: String,
     index: true,
   },
+  totalVideos: {
+  type: Number,
+  default: 0,
+},
 
   imageName: {
     type: String,
@@ -93,9 +119,27 @@ isJob:{
   },
 
   bbox: {
-    type: [Number],
-    default: [],
+  type: [Number],
+  default: [],
+  set: function (v) {
+    if (!v || v === "" || v === null || v === undefined) return [];
+
+    if (Array.isArray(v)) {
+      const nums = v.map(Number).filter((n) => !isNaN(n));
+      return nums.length === 4 ? nums : [];
+    }
+
+    if (typeof v === "string") {
+      const nums = v
+        .split(",")
+        .map((n) => Number(n.trim()))
+        .filter((n) => !isNaN(n));
+      return nums.length === 4 ? nums : [];
+    }
+
+    return [];
   },
+},
 
   timestamp: {
     type: Number,

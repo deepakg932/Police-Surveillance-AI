@@ -13,10 +13,16 @@ from PIL import Image
 from deepface import DeepFace
 from fastapi.staticfiles import StaticFiles
 import re
-
+import threading
+import time
+import uuid
+import traceback
 
 app = FastAPI()
 
+ASYNC_JOBS = {}
+ASYNC_JOBS_LOCK = threading.Lock()
+CURRENT_ASYNC_JOB_ID = None
 # --------------------------------
 # DEVICE
 # --------------------------------
@@ -192,11 +198,11 @@ COLOR_THRESHOLDS = {
 def get_vehicle_body_crop(frame, box, padding_ratio=0.05):
     """
     Extract the vehicle body region, stripping road, sky and background.
-    
+   
     Strategy:
     - Horizontal: use center 80% (strip door-frame edges that may be background)
     - Vertical: use 15%–80% of height (strip roof antenna / road shadow)
-    - Extra: reject if crop mean brightness is too close to pure white (sky) 
+    - Extra: reject if crop mean brightness is too close to pure white (sky)
       or pure black (shadow on road)
     """
     x1, y1, x2, y2 = map(int, box)
@@ -224,13 +230,36 @@ def get_vehicle_body_crop(frame, box, padding_ratio=0.05):
 
     return zone_a, zone_b, zone_c
 
+def publish_live_results(results_list, job_id=None):
+    global CURRENT_ASYNC_JOB_ID
+
+    active_job_id = job_id or CURRENT_ASYNC_JOB_ID
+
+    if not active_job_id:
+        return
+
+    with ASYNC_JOBS_LOCK:
+        if active_job_id in ASYNC_JOBS:
+            ASYNC_JOBS[active_job_id]["live_results"] = list(results_list[-10:])
+            ASYNC_JOBS[active_job_id]["updated_at"] = int(time.time())
+
+
+
+
+
+
+def is_job_cancelled(job_id: str):
+    with ASYNC_JOBS_LOCK:
+        job = ASYNC_JOBS.get(job_id)
+        return bool(job and job.get("cancel_requested"))
+
 
 def vehicle_color_match(frame, box, color_name):
     """
     Multi-zone color validation for vehicles.
-    
+   
     Returns (matched: bool, confidence: float, details: dict)
-    
+   
     Requires at least 2 of 3 zones to exceed threshold.
     Also applies confusion-pair exclusion.
     """
@@ -1408,6 +1437,9 @@ def run_person_color_only_mode(cap, color_name, gender, results_list):
     print(f"  Searching: {gender if gender else 'person'} wearing {color_name} (any clothing)")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -1457,6 +1489,7 @@ def run_person_color_only_mode(cap, color_name, gender, results_list):
                 "image_path": img_path,
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 
 
 
@@ -1833,6 +1866,9 @@ def run_person_clothing_any_mode(cap, clothing_type, results_list):
     print(f"  YOLOWorld labels: {yolo_labels}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -1910,6 +1946,7 @@ def run_person_clothing_any_mode(cap, clothing_type, results_list):
                             "timestamp":     frame_id,
                             "method":        "person_crop_label_match"
                         })
+                        publish_live_results(results_list)
                         found_local = True
                         break
                     if found_local:
@@ -1940,6 +1977,7 @@ def run_person_clothing_any_mode(cap, clothing_type, results_list):
                         "timestamp":     frame_id,
                         "method":        "ethnic_person_fallback"
                     })
+                    publish_live_results(results_list)
             continue
 
         # Step 4: Match clothing boxes to person boxes
@@ -1993,6 +2031,7 @@ def run_person_clothing_any_mode(cap, clothing_type, results_list):
                 "timestamp":     frame_id,
                 "method":        "yolo_match"
             })
+            publish_live_results(results_list)
 
 
 
@@ -2018,6 +2057,9 @@ def run_person_clothing_color_mode(cap, clothing_type, color_name, results_list)
     print(f"  Searching: person wearing {color_name} {clothing_type}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -2103,6 +2145,7 @@ def run_person_clothing_color_mode(cap, clothing_type, color_name, results_list)
                 "timestamp":     frame_id,
                 "method":        "yolo_color_match"
             })
+            publish_live_results(results_list)
 
         # ── METHOD B: Person-crop label + color fallback ──
         for p_idx, pbox in enumerate(p_boxes):
@@ -2183,6 +2226,7 @@ def run_person_clothing_color_mode(cap, clothing_type, color_name, results_list)
                 "timestamp":     frame_id,
                 "method":        "person_crop_label_color_fallback"
             })
+            publish_live_results(results_list)
 
 
 
@@ -2198,6 +2242,9 @@ def run_text_search_mode(cap, target_text, results_list):
     print(f"Searching text: {target_text}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -2242,6 +2289,7 @@ def run_text_search_mode(cap, target_text, results_list):
                     "image_path": img_path,
                     "timestamp": frame_id
                 })
+                publish_live_results(results_list)
 
 
 
@@ -2286,6 +2334,9 @@ def run_person_bag_any_mode(cap, bag_type, results_list):
     print(f"  Searching: person with ANY {bag_type}")
  
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+                cap.release()
+                raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -2381,6 +2432,7 @@ def run_person_bag_any_mode(cap, bag_type, results_list):
                 "image_path":   img_path,
                 "timestamp":    frame_id
             })
+            publish_live_results(results_list)
 
 def debug_bag_color(image_path, bag_box, requested_color):
     """
@@ -2629,6 +2681,9 @@ def run_person_shoes_any_mode(cap,shoe_type, results_list):
     print(f"  Searching: person with {shoe_type} (excluding sandals)")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -2677,6 +2732,7 @@ def run_person_shoes_any_mode(cap,shoe_type, results_list):
                     "image_path": img_path,
                     "timestamp": frame_id
                 })
+                publish_live_results(results_list)
                 break  # one shoe match per person is enough
 
 
@@ -2690,6 +2746,9 @@ def run_person_shoes_color_mode(cap, color_name, shoe_type, results_list):
     print(f"  Searching: person with {color_name} {shoe_type}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -2793,6 +2852,7 @@ def run_person_shoes_color_mode(cap, color_name, shoe_type, results_list):
                     "image_path": img_path,
                     "timestamp": frame_id
                 })
+                publish_live_results(results_list)
                 matched_person_idx.add((px1 // 20, py1 // 20))
                 break  # one shoe match per person
 
@@ -2878,6 +2938,7 @@ def run_person_shoes_color_mode(cap, color_name, shoe_type, results_list):
                 "timestamp": frame_id,
                 "method": "foot_region_fallback"
             })
+            publish_live_results(results_list)
 
 
 def shoes_belongs_to_person(p_box, s_box):
@@ -2897,6 +2958,9 @@ def run_person_bag_color_mode(cap, color_name, bag_type, results_list):
     print(f"  Searching: person with {color_name} {bag_type}")
  
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -3015,6 +3079,7 @@ def run_person_bag_color_mode(cap, color_name, bag_type, results_list):
                 "image_path":   img_path,
                 "timestamp":    frame_id
             })
+            publish_live_results(results_list)
 
 
 def helmet_belongs_to_person_strict(p_box, h_box):
@@ -3080,6 +3145,9 @@ def run_person_without_helmet_mode(cap, results_list):
     print(f"\n  🔍 Searching: person without helmet (two-wheeler only)\n")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -3114,7 +3182,7 @@ def run_person_without_helmet_mode(cap, results_list):
         # This avoids auto/e-rickshaw/car confusion from open-vocabulary labels.
         # ═════════════════════════════════════════════════════════════
         v_boxes = []
-        
+       
         # ── Method A: YOLO class 3 (motorcycle) ──
         yolo_res = car_model(frame, classes=[3], conf=0.40)
         if yolo_res[0].boxes is not None:
@@ -3175,22 +3243,22 @@ def run_person_without_helmet_mode(cap, results_list):
             # ─── CHECK 1: HELMET ───
             has_helmet = False
             helmet_overlap = 0
-            
+           
             if len(h_boxes) > 0:
                 for hbox in h_boxes:
                     hx1, hy1, hx2, hy2 = map(int, hbox)
                     iou_val = iou(pbox, [hx1, hy1, hx2, hy2])
                     helmet_overlap = max(helmet_overlap, iou_val)
-                    
+                   
                     # Helmet must be on head (top 30% of person)
                     head_region = [px1, py1, px2, py1 + int(ph * 0.30)]
                     iou_head = iou(head_region, [hx1, hy1, hx2, hy2])
-                    
+                   
                     if iou_head > 0.08 or iou_val > 0.15:  # ✅ RELAXED thresholds
                         has_helmet = True
                         print(f"  [Frame {frame_id}] HELMET DETECTED! overlap={iou_val:.3f}")
                         break
-            
+           
             if has_helmet:
                 print(f"  [Frame {frame_id}] Person HAS helmet - SKIPPING")
                 continue
@@ -3217,11 +3285,11 @@ def run_person_without_helmet_mode(cap, results_list):
             # ═════════════════════════════════════════════════════════════
             label = "🚨 NO HELMET! (Two-Wheeler)"
             key = f"no_helmet_{px1//50}_{py1//50}"
-            
+           
             if tracker.should_skip(key, frame_id):
                 print(f"  [Frame {frame_id}] Skipped (cooldown)")
                 continue
-            
+           
             tracker.update(key, frame_id)
 
             ann = frame.copy()
@@ -3245,6 +3313,7 @@ def run_person_without_helmet_mode(cap, results_list):
                 "timestamp": frame_id,
                 "frame_id": frame_id
             })
+            publish_live_results(results_list)
 
     print(f"\n  📊 SUMMARY: {len(results_list)} violations found\n")
 
@@ -3252,7 +3321,7 @@ def run_person_without_helmet_mode(cap, results_list):
 # ═════════════════════════════════════════════════════════════════════
 # THRESHOLD CHANGES SUMMARY:
 # ═════════════════════════════════════════════════════════════════════
-# 
+#
 # Person detection:      0.45 → 0.35  (catches more people)
 # Helmet detection:      0.20 → 0.35  (reduces false positives)  
 # YOLO two-wheeler:      0.45 → 0.35  (catches more bikes)
@@ -3377,6 +3446,9 @@ def run_triple_riding_mode(cap, vehicle_type, results_list):
     print(f"  Searching: triple riding on {vehicle_type}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -3487,6 +3559,7 @@ def run_triple_riding_mode(cap, vehicle_type, results_list):
                     "image_path":    img_path,
                     "timestamp":     frame_id
                 })
+                publish_live_results(results_list)
 
 
 
@@ -3501,6 +3574,9 @@ def run_gender_color_mode(cap, gender_target, color_name, results_list):
    
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -3606,6 +3682,7 @@ def run_gender_color_mode(cap, gender_target, color_name, results_list):
                 "image_path": img_path,
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 def run_person_helmet_color_mode(cap, color_name, results_list):
     tracker = CooldownTracker()
     frame_id = 0
@@ -3613,6 +3690,9 @@ def run_person_helmet_color_mode(cap, color_name, results_list):
     print(f"Searching: person with {color_name} helmet")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -3700,6 +3780,7 @@ def run_person_helmet_color_mode(cap, color_name, results_list):
                 "image_path": img_path,
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 
 
 
@@ -3711,6 +3792,10 @@ def run_person_helmet_any_mode(cap, prompt, results_list):
     two_wheeler_info = {"strategy": "yolo_class", "class_ids": [3]}  # class 3 = motorcycle
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
+
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -3790,6 +3875,7 @@ def run_person_helmet_any_mode(cap, prompt, results_list):
                 "image_path": img_path,
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 # ================================
 # VEHICLE DETECTION HELPER
 # ================================
@@ -3934,6 +4020,9 @@ def run_plate_mode(cap, plate_info, results_list):
     print(f"  Plate type: {ptype} | {plate_info.get('desc','')}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -4029,6 +4118,7 @@ def run_plate_mode(cap, plate_info, results_list):
                 "vehicle_bbox": car_box,
                 "timestamp":    frame_id
             })
+            publish_live_results(results_list)
 
 
 
@@ -4038,7 +4128,7 @@ def run_plate_mode(cap, plate_info, results_list):
 def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_list):
     """
     Accurate color + vehicle detection.
-    
+   
     Improvements over old version:
     1. Multi-zone body sampling (strips road/sky background)
     2. Per-color adaptive thresholds
@@ -4068,6 +4158,9 @@ def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_l
         world_model.set_classes(["car", "vehicle", "automobile", "sedan", "hatchback", "suv"])
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -4316,7 +4409,7 @@ def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_l
             if color_ok:
                 print(f"    Frame {frame_id}: color={color_name} conf={confidence:.2f} "
                       f"zones_passed={details.get('passed', '?')} area={area}")
-            
+           
             if not confirmed:
                 continue   # waiting for more frame votes
 
@@ -4364,6 +4457,7 @@ def run_color_object_mode(cap, color_name, vehicle_word, vehicle_info, results_l
                 "timestamp":     frame_id,
                 "zone_details":  details
             })
+            publish_live_results(results_list)
 
         # Periodic tracker cleanup
         if frame_id % 60 == 0:
@@ -4380,6 +4474,9 @@ def run_person_attribute_mode(cap, attributes, results_list):
     frame_id = 0
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -4441,6 +4538,7 @@ def run_person_attribute_mode(cap, attributes, results_list):
                 "bbox":      [px1,py1,px2,py2],
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 
 
 # ---- 3.5 NEW: PERSON + ATTRIBUTE + COLOR ----
@@ -4453,6 +4551,9 @@ def run_person_attribute_color_mode(cap, attribute, color_name, results_list):
     print(f"  Searching: person with {attribute} wearing {color_name}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -4516,6 +4617,7 @@ def run_person_attribute_color_mode(cap, attribute, color_name, results_list):
                 "bbox": [px1, py1, px2, py2],
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 
 def predict_gender_deepface(crop):
     try:
@@ -4553,6 +4655,9 @@ def run_person_vehicle_color_mode(cap, vehicle_word, vehicle_info, color_name, r
     print(f"  Searching: person on {vehicle_word} wearing {color_name}")
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -4644,6 +4749,7 @@ def run_person_vehicle_color_mode(cap, vehicle_word, vehicle_info, color_name, r
                 "image_path":   img_path,
                 "timestamp":    frame_id
             })
+            publish_live_results(results_list)
 
 
 # ---- 4. PERSON WEARING COLOR CLOTHES ----
@@ -4654,6 +4760,9 @@ def run_color_attribute_mode(cap, object_class, color_name, results_list):
     world_model.set_classes([object_class])
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -4691,6 +4800,7 @@ def run_color_attribute_mode(cap, object_class, color_name, results_list):
                 "bbox":      [x1,y1,x2,y2],
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 
 
 # ---- 5. PERSON + VEHICLE PROXIMITY ----
@@ -4701,6 +4811,9 @@ def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
     world_model.set_classes(["person"])
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -4746,6 +4859,7 @@ def run_person_vehicle_mode(cap, vehicle_word, vehicle_info, results_list):
                     "image_path":   path,
                     "timestamp":    frame_id
                 })
+                publish_live_results(results_list)
                 break
 
 
@@ -5063,6 +5177,8 @@ def run_reference_image_search_mode(cap, ref_feat, ref_image, results_list):
     if not face_mode_available and not appearance_mode_available:
         print(f"  ❌ Both modes failed — cannot search")
         results_list.append({"error": "Reference image process nahi hua"})
+        publish_live_results(results_list)
+
         return
 
     # ══════════════════════════════════════════════════════════
@@ -5101,6 +5217,9 @@ def run_reference_image_search_mode(cap, ref_feat, ref_image, results_list):
     # STEP 2: Video frame loop
     # ══════════════════════════════════════════════════════════
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret:
             break
@@ -5403,6 +5522,7 @@ def run_reference_image_search_mode(cap, ref_feat, ref_image, results_list):
                 "timestamp":     frame_id,
                 "source":        "dual_mode_search"
             })
+            publish_live_results(results_list)
 
             print(f"  ✅ MATCH #{match_count} | "
                   f"frame={frame_id} | "
@@ -5475,6 +5595,7 @@ def run_reference_image_search_mode(cap, ref_feat, ref_image, results_list):
                         "timestamp": fid,
                         "source": "candidate_fallback"
                     })
+                    publish_live_results(results_list)
                     target_ids.discard(fid)
         except Exception as e:
             print(f"  ⚠️  Candidate fallback failed: {e}")
@@ -5489,6 +5610,9 @@ def run_yoloworld_mode(cap, prompt, ref_feat, results_list):
     world_model.set_classes(prompts)
 
     while cap.isOpened():
+        if is_job_cancelled(CURRENT_ASYNC_JOB_ID):
+            cap.release()
+            raise Exception("Job cancelled")
         ret, frame = cap.read()
         if not ret: break
         frame_id += 1
@@ -5529,6 +5653,7 @@ def run_yoloworld_mode(cap, prompt, ref_feat, results_list):
                 "bbox":      [x1,y1,x2,y2],
                 "timestamp": frame_id
             })
+            publish_live_results(results_list)
 
 
 # ================================
@@ -6130,3 +6255,103 @@ async def process_video(req: Request):
         "parsed_prompt": parsed,
         "total_found":   len(results_list)
     }
+# ================================
+# ASYNC JOB RUNNER
+# ================================
+
+def _run_async_process_job(job_id: str, payload: dict):
+    global CURRENT_ASYNC_JOB_ID
+    CURRENT_ASYNC_JOB_ID = job_id
+
+    with ASYNC_JOBS_LOCK:
+        ASYNC_JOBS[job_id]["status"] = "processing"
+        ASYNC_JOBS[job_id]["updated_at"] = int(time.time())
+
+    try:
+        import asyncio
+
+        class FakeRequest:
+            async def json(self):
+                return payload
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(process_video(FakeRequest()))
+        loop.close()
+
+        with ASYNC_JOBS_LOCK:
+            ASYNC_JOBS[job_id]["status"] = "completed"
+            ASYNC_JOBS[job_id]["result"] = result
+            ASYNC_JOBS[job_id]["updated_at"] = int(time.time())
+
+    except Exception as exc:
+        with ASYNC_JOBS_LOCK:
+            ASYNC_JOBS[job_id]["status"] = "failed"
+            ASYNC_JOBS[job_id]["error"] = str(exc)
+            ASYNC_JOBS[job_id]["trace"] = traceback.format_exc(limit=3)
+            ASYNC_JOBS[job_id]["updated_at"] = int(time.time())
+
+    finally:
+        CURRENT_ASYNC_JOB_ID = None
+
+
+
+@app.post("/process/start")
+async def process_start(req: Request):
+    payload = await req.json()
+    job_id = f"pyjob_{uuid.uuid4().hex}"
+
+    with ASYNC_JOBS_LOCK:
+        ASYNC_JOBS[job_id] = {
+            "status": "queued",
+            "result": None,
+            "live_results": [],
+            "error": None,
+            "trace": None,
+            "cancel_requested": False,
+            "created_at": int(time.time()),
+            "updated_at": int(time.time()),
+        }
+
+    thread = threading.Thread(
+        target=_run_async_process_job,
+        args=(job_id, payload),
+        daemon=True
+    )
+    thread.start()
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+    }
+
+@app.get("/process/status/{job_id}")
+async def process_status(job_id: str):
+    with ASYNC_JOBS_LOCK:
+        data = ASYNC_JOBS.get(job_id)
+
+    if not data:
+        return {"job_id": job_id, "status": "not_found"}
+
+    return {
+        "job_id": job_id,
+        "status": data.get("status", "unknown"),
+        "results": data.get("live_results", []),
+        "result": data.get("result") if data.get("status") == "completed" else None,
+        "error": data.get("error"),
+    }
+
+
+@app.post("/process/cancel/{job_id}")
+async def process_cancel(job_id: str):
+    with ASYNC_JOBS_LOCK:
+        if job_id not in ASYNC_JOBS:
+            return {"job_id": job_id, "status": "not_found"}
+
+        ASYNC_JOBS[job_id]["cancel_requested"] = True
+        ASYNC_JOBS[job_id]["status"] = "failed"
+        ASYNC_JOBS[job_id]["error"] = "Cancelled by Node/server stop"
+        ASYNC_JOBS[job_id]["updated_at"] = int(time.time())
+
+    print(f"🛑 Cancel requested for job: {job_id}")
+    return {"job_id": job_id, "status": "cancelled"}

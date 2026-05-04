@@ -1,8 +1,10 @@
 const axios = require("axios");
 const Detection = require("../models/Detection.js");
 const mongoose = require("mongoose")
+const path = require("path");
 
-
+const activePythonJobs = new Set();
+global.activePythonJobs = activePythonJobs;
 // exports.searchDetections = async (req, res) => {
 //   try {
 //       const userId = req.userId; // ✅ middleware se aaya
@@ -104,9 +106,9 @@ exports.searchDetections = async (req, res) => {
 
     const { jobId } = req.query;
     if (jobId) {
-  match.jobId = jobId;
-  match.isJob = { $ne: true };
-}
+      match.jobId = jobId;
+      match.isJob = { $ne: true };
+    }
 
 
     if (textNote) {
@@ -160,9 +162,9 @@ exports.searchDetections = async (req, res) => {
       message: "Success",
       counts: searchPrompt
         ? {
-            [`total_${searchPrompt.replace(/\s+/g, "_")}`]:
-              uniqueSet.size,
-          }
+          [`total_${searchPrompt.replace(/\s+/g, "_")}`]:
+            uniqueSet.size,
+        }
         : {},
       totalUniqueObjects: results.length,
       results: results.map((d) => ({
@@ -260,7 +262,7 @@ exports.searchDetections = async (req, res) => {
 //       .replace(/[^a-z0-9\s]/g, "")
 //       .trim();
 
-    
+
 
 //     finalCounts[`total_${normalizedPrompt.replace(/\s+/g, "_")}`] =
 //       uniqueSet.size;
@@ -328,177 +330,56 @@ exports.searchDetections = async (req, res) => {
 //     });
 //   }
 // };
-const addCommonPersonIds = (rows = []) => {
-  let counter = 0;
-  const signatureMap = new Map();
-
-  return rows.map((row) => {
-    const object = String(row.object || "").toLowerCase();
-    const isPerson = object.includes("person");
-    if (!isPerson) return row;
-
-    const signature = [
-      String(row.ocrText || "").toLowerCase(),
-      String(row.color || "").toLowerCase(),
-      object,
-    ].join("|");
-
-    let commonPersonId = signatureMap.get(signature);
-    if (!commonPersonId) {
-      counter += 1;
-      commonPersonId = `common_${counter}`;
-      signatureMap.set(signature, commonPersonId);
-    }
-
-    return { ...row, commonPersonId };
-  });
-};
-
-const processVideoInBackground = async (jobId, videoUrl, userId, userPrompt, imageUrl = null) => {
-  try {
-    const BASE_URL = process.env.BASE_URL;
-    const startTime = Date.now();
-
-    const response = await axios.post(
-      `${process.env.PYTHON_API_URL}/process`,
-      { fileUrl: videoUrl, imageUrl, prompt: userPrompt },
-      { timeout: 7200000 }
-    );
-
-    const endTime = Date.now();
-    const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
-
-    const detections = (response.data.results || []).map((d, index) => {
-      const cleanPath = (d.image_path || "").replace(/\\/g, "/");
-      const fileNameOnly = cleanPath.split("/").pop();
-
-      return {
-        userId: new mongoose.Types.ObjectId(userId),
-        jobId,
-        status: "processing",
-        fileName: videoUrl.split("/").pop(),
-        textNote: userPrompt,
-        object: d.object || d.prompt || "unknown",
-        ocrText: d.ocr_text || "",
-        confidence: d.confidence || d.similarity || 0.5,
-        trackingId: `track_${Date.now()}_${index}`,
-        timestamp: d.timestamp || 0,
-        bbox: Array.isArray(d.bbox) ? d.bbox : [],
-        imagePath: fileNameOnly,
-        screenshotUrl: fileNameOnly
-          ? `${BASE_URL}/uploads/detected_frames/${fileNameOnly}`
-          : "",
-        processingTime: processingTimeStr,
-        videoUrl,
-        color: d.color || "",
-      };
-    });
-
-    if (detections.length > 0) {
-      await Detection.insertMany(detections, { ordered: false });
-    }
-
-    // ✅ mark completed
-    await Detection.updateMany(
-      { jobId },
-      { $set: { status: "completed" } }
-    );
-
-  } catch (err) {
-    console.error("Background Error:", err.message);
-
-    await Detection.updateMany(
-      { jobId },
-      { $set: { status: "failed" } }
-    );
-  }
-};
-
 exports.uploadAndProcess = async (req, res) => {
   try {
     const userId = req.userId;
-    const videoFiles = req.files?.file || [];
+    const videoFile = req.files?.file?.[0];
+    const imageFile = req.files?.image?.[0];
     const userPrompt = req.body.text || "person";
-    console.log("[uploadAndProcess] request", {
-      userId,
-      totalVideos: videoFiles.length,
-      hasImage: Boolean(req.files?.image?.[0]),
-      prompt: userPrompt,
-    });
 
-    if (!videoFiles.length) {
+    if (!videoFile) {
       return res.status(400).json({ message: "Video file missing" });
     }
 
     const BASE_URL = process.env.BASE_URL;
-    const imageFile = req.files?.image?.[0];
+    const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
     const imageUrl = imageFile ? `${BASE_URL}/uploads/${imageFile.filename}` : null;
 
-    // Keep async job flow for single video (frontend already supports polling)
-    if (videoFiles.length === 1) {
-      const videoFile = videoFiles[0];
-      const jobId = `job_${Date.now()}`;
-      const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
-
-      await Detection.create({
-        userId: new mongoose.Types.ObjectId(userId),
-        jobId,
-        status: "processing",
-        fileName: videoFile.filename,
-        videoUrl,
-        textNote: userPrompt,
-        isJob: true,
-      });
-
-      processVideoInBackground(jobId, videoUrl, userId, userPrompt, imageUrl);
-      console.log("[uploadAndProcess] single job created", { jobId, videoUrl });
-
-      return res.json({
-        message: "Upload successful",
-        jobId,
-        status: "processing",
-      });
+    // ─── STEP 1: Start Python job first, get real jobId ───────
+    let jobId;
+    try {
+      const startRes = await axios.post(
+        `${process.env.PYTHON_API_URL}/process/start`,
+        { fileUrl: videoUrl, imageUrl, prompt: userPrompt },
+        { timeout: 30000 }
+      );
+      jobId = startRes.data.job_id;
+      console.log("✅ Python job started:", jobId);
+    } catch (err) {
+      console.error("❌ Failed to start Python job:", err.message);
+      return res.status(500).json({ error: "Python job start failed", details: err.message });
     }
 
-    // Multi-video async: upload first, then process each video in background.
-    const batchJobId = `job_${Date.now()}`;
+    // ─── STEP 2: Save initial job entry ───────────────────────
     await Detection.create({
       userId: new mongoose.Types.ObjectId(userId),
-      jobId: batchJobId,
-      status: "processing",
-      fileName: "__batch__",
-      textNote: userPrompt,
+      jobId,
       isJob: true,
+      status: "processing",
+      fileName: videoFile.filename,
+      textNote: userPrompt,
+      videoUrl,
+      processingTime: null,
     });
 
-    videoFiles.forEach(async (videoFile, index) => {
-      try {
-        const childJobId = `${batchJobId}__v${index + 1}`;
-        const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
+    // ─── STEP 3: Background polling + save ────────────────────
+    processVideoInBackground(jobId, videoUrl, userId, userPrompt, videoFile.filename);
 
-        await Detection.create({
-          userId: new mongoose.Types.ObjectId(userId),
-          jobId: childJobId,
-          status: "processing",
-          fileName: videoFile.filename,
-          videoUrl,
-          textNote: userPrompt,
-          isJob: true,
-        });
-
-        processVideoInBackground(childJobId, videoUrl, userId, userPrompt, imageUrl);
-        console.log("[uploadAndProcess] child job queued", { batchJobId, childJobId, videoUrl });
-      } catch (childErr) {
-        console.error("Child job create error:", childErr.message);
-      }
-    });
-
+    // ─── STEP 4: Immediate response (no timeout!) ─────────────
     return res.json({
       message: "Upload successful",
-      mode: "Multi Video Upload (Background)",
-      jobId: batchJobId,
+      jobId,
       status: "processing",
-      totalVideos: videoFiles.length,
     });
 
   } catch (err) {
@@ -506,6 +387,225 @@ exports.uploadAndProcess = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
+
+
+const processVideoInBackground = async (
+  jobId,
+  videoUrl,
+  userId,
+  userPrompt,
+  fileName,
+) => {
+  try {
+    activePythonJobs.add(jobId);
+    const BASE_URL = process.env.BASE_URL;
+    const startTime = Date.now();
+
+    const MAX_WAIT_MS = 7200000;
+    const POLL_INTERVAL = 10000;
+    const pollStart = Date.now();
+
+    let pyResult = null;
+    let retryCount = 0;
+    const MAX_RETRY = 3;
+
+    while (Date.now() - pollStart < MAX_WAIT_MS) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+
+      let statusRes;
+      try {
+        statusRes = await axios.get(
+          `${process.env.PYTHON_API_URL}/process/status/${jobId}`,
+          { timeout: 15000 }
+        );
+      } catch (pollErr) {
+        retryCount++;
+
+        console.warn(`❌ Poll failed (${retryCount})`, pollErr.message);
+
+        if (retryCount >= MAX_RETRY) {
+          throw new Error("Python server unreachable / network failed");
+        }
+
+        continue;
+      }
+
+      const { status, result, error } = statusRes.data;
+      retryCount = 0;
+      console.log(`🔄 Job ${jobId} status: ${status}`);
+
+      const liveResults = result?.results || statusRes.data?.results || [];
+
+      if (Array.isArray(liveResults) && liveResults.length > 0) {
+        const liveDocs = liveResults.map((d, index) => {
+          const cleanPath = (d.image_path || d.imagePath || "").replace(/\\/g, "/");
+          const fileNameOnly = cleanPath.split("/").pop();
+
+          let conf = 0.85;
+          if (typeof d.confidence === "number") conf = d.confidence;
+          else if (d.plate) conf = 0.9;
+
+          let bbox = [];
+          for (const key of ["bbox", "plate_bbox", "person_bbox", "vehicle_bbox"]) {
+            if (Array.isArray(d[key]) && d[key].length === 4) {
+              bbox = d[key].map(Number).filter((n) => !isNaN(n));
+              if (bbox.length !== 4) bbox = [];
+              break;
+            }
+          }
+
+          return {
+            userId: new mongoose.Types.ObjectId(userId),
+            jobId,
+            isJob: false,
+            status: "processing",
+            fileName,
+            textNote: userPrompt,
+            object: d.object || d.prompt || "unknown",
+            ocrText: d.ocr_text || d.plate || d.ocrText || "",
+            confidence: conf,
+            trackingId: (d.trackingId || d.tracking_id || `live_${jobId}_${index}`).toString(),
+            timestamp: typeof d.timestamp === "number" ? d.timestamp : 0,
+            bbox,
+            imagePath: fileNameOnly,
+            screenshotUrl: d.screenshotUrl || (fileNameOnly ? `${BASE_URL}/${fileNameOnly}` : ""),
+            processingTime: "",
+            videoUrl,
+            color: d.color || d.vehicle || "",
+          };
+        });
+
+        await Detection.bulkWrite(
+          liveDocs.map((doc) => ({
+            updateOne: {
+              filter: {
+                userId: doc.userId,
+                jobId: doc.jobId,
+                trackingId: doc.trackingId,
+                isJob: false,
+              },
+              update: { $set: doc },
+              upsert: true,
+            },
+          }))
+        );
+
+        console.log(`🟢 Live detections saved: ${liveDocs.length}`);
+      }
+
+      if (status === "completed") {
+        pyResult = result;
+        break;
+      }
+
+      if (status === "failed") {
+        throw new Error(`Python job failed: ${error || "unknown"}`);
+      }
+    }
+
+    if (!pyResult) {
+      throw new Error("Timeout after 2 hours");
+    }
+
+    const endTime = Date.now();
+    const processingTimeStr = `${((endTime - startTime) / 1000).toFixed(2)}s`;
+
+    const detections = (pyResult.results || []).map((d, index) => {
+      const cleanPath = (d.image_path || d.imagePath || "").replace(/\\/g, "/");
+      const fileNameOnly = cleanPath.split("/").pop();
+
+      let conf = 0.85;
+      if (typeof d.confidence === "number") conf = d.confidence;
+      else if (d.plate) conf = 0.9;
+
+      let bbox = [];
+      for (const key of ["bbox", "plate_bbox", "person_bbox", "vehicle_bbox"]) {
+        if (Array.isArray(d[key]) && d[key].length === 4) {
+          bbox = d[key].map(Number).filter((n) => !isNaN(n));
+          if (bbox.length !== 4) bbox = [];
+          break;
+        }
+      }
+
+      return {
+        userId: new mongoose.Types.ObjectId(userId),
+        jobId,
+        isJob: false,
+        status: "completed",
+        fileName,
+        textNote: userPrompt,
+        object: d.object || d.prompt || "unknown",
+        ocrText: d.ocr_text || d.plate || d.ocrText || "",
+        confidence: conf,
+        trackingId: (d.trackingId || d.tracking_id || `TRK-${Math.floor(1000 + Math.random() * 9000)}`).toString(),
+        timestamp: typeof d.timestamp === "number" ? d.timestamp : 0,
+        bbox,
+        imagePath: fileNameOnly,
+        screenshotUrl: d.screenshotUrl || (fileNameOnly ? `${BASE_URL}/${fileNameOnly}` : ""),
+        processingTime: processingTimeStr,
+        videoUrl,
+        color: d.color || d.vehicle || "",
+      };
+    });
+
+    if (detections.length > 0) {
+      await Detection.bulkWrite(
+        detections.map((doc) => ({
+          updateOne: {
+            filter: {
+              userId: doc.userId,
+              jobId: doc.jobId,
+              trackingId: doc.trackingId,
+              isJob: false,
+            },
+            update: { $set: doc },
+            upsert: true,
+          },
+        }))
+      );
+
+      console.log("💾 Final detections saved:", detections.length);
+    }
+
+    await Detection.deleteMany({
+      jobId,
+      userId: new mongoose.Types.ObjectId(userId),
+      isJob: false,
+      status: "processing",
+    });
+
+    await Detection.updateOne(
+      { jobId, isJob: true },
+      {
+        $set: {
+          status: "completed",
+          processingTime: processingTimeStr,
+          mode: pyResult.mode || null,
+        },
+      }
+    );
+
+    console.log(`✅ Background job done: ${jobId} — ${detections.length} detections`);
+  } catch (err) {
+    console.error("Background Error:", err.message);
+
+
+    await Detection.updateOne(
+      { jobId, isJob: true },
+      {
+        $set: {
+          status: "failed",
+          errorMessage: err.message,
+        },
+      }
+    );
+  } finally {
+    activePythonJobs.delete(jobId);
+    console.log("🧹 Job removed from active list:", jobId);
+  }
+};
+
+
 // ✅ IMAGE-ONLY DETECTION (no video)
 exports.detectFromImage = async (req, res) => {
   try {
@@ -616,33 +716,24 @@ exports.deleteByTrackingId = async (req, res) => {
   try {
     const userId = req.userId;
     const { trackingId } = req.params;
-    const { jobId } = req.query; // ✅ optional
-
-    console.log("User:", userId, "Tracking:", trackingId, "Job:", jobId);
-
-    if (!trackingId) {
-      return res.status(400).json({ message: "trackingId is required" });
-    }
+    const { jobId } = req.query;
 
     let filter = {
       userId: new mongoose.Types.ObjectId(userId),
-      trackingId,
     };
 
-    // 🔥 OPTIONAL: same trackingId different jobs me ho to control
+    // ✅ jobId hai to usse delete karo (job + uski detections dono)
     if (jobId) {
       filter.jobId = jobId;
+      filter.trackingId = trackingId;
+    } else {
+      filter.trackingId = trackingId;
     }
 
     const result = await Detection.deleteMany(filter);
-
-    return res.json({
-      message: "Detections deleted successfully",
-      deletedCount: result.deletedCount,
-    });
+    return res.json({ message: "Deleted", deletedCount: result.deletedCount });
 
   } catch (err) {
-    console.error("deleteByTrackingId Error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
@@ -651,97 +742,75 @@ exports.deleteMultiple = async (req, res) => {
   try {
     const userId = req.userId;
     const { jobId } = req.query;
+    const jobIds = req.body?.jobIds || [];      // ✅ jobIds lo, trackingIds nahi
     const trackingIds = req.body?.trackingIds || [];
 
-    if (!userId) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
+    let filter = { userId: new mongoose.Types.ObjectId(userId) };
 
-    let filter = {
-      userId: new mongoose.Types.ObjectId(userId),
-    };
-
-    // 🔥 Case 1: delete by jobId
     if (jobId) {
+      // Case 1: ek specific job delete
       filter.jobId = jobId;
-    }
-
-    // 🔥 Case 2: delete selected trackingIds
-    else if (trackingIds.length > 0) {
+    } else if (jobIds.length > 0) {
+      // Case 2: multiple jobs delete — job entries + detections dono
+      filter.jobId = { $in: jobIds };
+    } else if (trackingIds.length > 0) {
+      // Case 3: sirf specific detections delete
       filter.trackingId = { $in: trackingIds };
     }
-
-    // 🔥 Case 3: DELETE ALL (no extra condition needed)
-    // filter remains only userId
+    // Case 4: kuch nahi — DELETE ALL (filter = sirf userId)
 
     const result = await Detection.deleteMany(filter);
-
-    return res.json({
-      message: "Deleted successfully",
-      deletedCount: result.deletedCount,
-    });
+    return res.json({ message: "Deleted", deletedCount: result.deletedCount });
 
   } catch (err) {
-    console.error("Delete Error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
+
 
 exports.getJobStatus = async (req, res) => {
   try {
     const { jobId } = req.params;
     const userId = req.userId;
-    console.log("[getJobStatus] checking", { userId, jobId });
+
+    const userObjectId = new mongoose.Types.ObjectId(userId);
 
     const job = await Detection.findOne({
       jobId,
-      userId: new mongoose.Types.ObjectId(userId),
-        isJob: true, // 🔥 ADD THIS
-
+      userId: userObjectId,
+      isJob: true,
     });
 
     if (!job) {
-      return res.json({ jobId, status: "not_found", results: [] });
-    }
-
-    let status = job.status;
-    let results = [];
-
-    // Batch parent job: aggregate all child jobs.
-    if (job.fileName === "__batch__") {
-      const childJobs = await Detection.find({
-        userId: new mongoose.Types.ObjectId(userId),
-        isJob: true,
-        jobId: { $regex: `^${jobId}__v` },
-      }).sort({ createdAt: 1 });
-
-      const allCompleted = childJobs.length > 0 && childJobs.every((j) => j.status === "completed");
-      const anyFailed = childJobs.some((j) => j.status === "failed");
-
-      if (allCompleted) {
-        status = "completed";
-        const childIds = childJobs.map((j) => j.jobId);
-        results = await Detection.find({
-          userId: new mongoose.Types.ObjectId(userId),
-          isJob: { $ne: true },
-          jobId: { $in: childIds },
-        }).sort({ createdAt: -1 });
-        await Detection.updateOne({ _id: job._id }, { $set: { status: "completed" } });
-      } else if (anyFailed) {
-        status = "failed";
-      } else {
-        status = "processing";
-      }
-    } else if (status === "completed") {
-      results = await Detection.find({
+      return res.json({
         jobId,
-        userId: new mongoose.Types.ObjectId(userId),
-        isJob: { $ne: true },
-      }).sort({ createdAt: -1 });
+        status: "not_found",
+        total: 0,
+        results: [],
+      });
     }
 
-    let resultRows = addCommonPersonIds(
-      results.map((d) => ({
+    // ✅ processing me bhi detections return karega
+    // const results = await Detection.find({
+    //   jobId,
+    //   userId: userObjectId,
+    //   isJob: { $ne: true },
+    // }).sort({ createdAt: -1 });
+    const results = await Detection.find({
+      jobId,
+      userId: userObjectId,
+      isJob: { $ne: true },
+      ...(job.status === "completed" ? { status: "completed" } : {}),
+    }).sort({ confidence: -1, createdAt: -1 });
+
+    return res.json({
+      message: "Success",
+      jobId,
+      processing_time: job.processingTime || null,
+      status: job.status,
+      errorMessage: job.errorMessage || "",
+      total: results.length,
+      results: results.map((d) => ({
         object: d.object,
         ocrText: d.ocrText,
         confidence: d.confidence,
@@ -751,154 +820,621 @@ exports.getJobStatus = async (req, res) => {
         bbox: d.bbox,
         screenshotUrl: d.screenshotUrl,
         color: d.color || "",
-        fileName: d.fileName || "",
+        action: d.action || "Clip Saved",
+        status: d.status || job.status,
       })),
-    );
-
-    // For multi-video batch jobs, return ONLY common persons/results.
-    if (job.fileName === "__batch__" && resultRows.length > 0) {
-      const commonById = resultRows.reduce((acc, row) => {
-        if (!row.commonPersonId) return acc;
-        if (!acc[row.commonPersonId]) {
-          acc[row.commonPersonId] = new Set();
-        }
-        acc[row.commonPersonId].add(row.fileName || "");
-        return acc;
-      }, {});
-
-      const commonIds = new Set(
-        Object.entries(commonById)
-          .filter(([, fileSet]) => fileSet.size > 1)
-          .map(([id]) => id),
-      );
-
-      resultRows = resultRows.filter((row) => commonIds.has(row.commonPersonId));
-    }
-
-    return res.json({
-      jobId,
-      status,
-      total: resultRows.length,
-      totalCommonPersons: new Set(resultRows.map((r) => r.commonPersonId).filter(Boolean)).size,
-      results: resultRows,
     });
-
   } catch (err) {
     console.error("Status Error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
-exports.getHistory = async (req, res) => {
-  try {
-    const userId = req.userId;
-    const history = await Detection.aggregate([
-      {
-        $match: {
+// ================================================================
+// MULTI VIDEO UPLOAD — Single video jaisa hi kaam karta hai
+// Har video ko same prompt/image se process karta hai
+// ================================================================
+    const processBatchVideos = async (jobs, batchId, userId, BASE_URL) => {
+  console.log(`🎬 Batch ${batchId} start — ${jobs.length} videos`);
+
+  for (let i = 0; i < jobs.length; i++) {
+    const job = jobs[i];
+    let pyJobId = null;
+
+    try {
+      const startTime = Date.now();
+
+      const pythonPayload = {
+        fileUrl: job.videoUrl,
+        prompt: job.userPrompt,
+      };
+
+      if (job.imageUrl) pythonPayload.imageUrl = job.imageUrl;
+
+      const startRes = await axios.post(
+        `${process.env.PYTHON_API_URL}/process/start`,
+        pythonPayload,
+        { timeout: 30000 }
+      );
+
+      pyJobId = startRes.data.job_id;
+      activePythonJobs.add(pyJobId);
+      console.log(`✅ Python job started: ${pyJobId}`);
+
+      const POLL_INTERVAL_MS = 10000;
+      const MAX_WAIT_MS = 7200000;
+      const pollStart = Date.now();
+
+      let pythonResult = null;
+      let retryCount = 0;
+      const MAX_RETRY = 3;
+
+      while (Date.now() - pollStart < MAX_WAIT_MS) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+        let statusRes;
+        try {
+          statusRes = await axios.get(
+            `${process.env.PYTHON_API_URL}/process/status/${pyJobId}`,
+            { timeout: 15000 }
+          );
+          retryCount = 0;
+        } catch (pollErr) {
+          retryCount++;
+          console.warn(`Poll failed ${retryCount}/${MAX_RETRY}:`, pollErr.message);
+
+          if (retryCount >= MAX_RETRY) {
+            throw new Error("Python server unreachable / network failed");
+          }
+          continue;
+        }
+
+        const { status, result, error } = statusRes.data;
+        const liveResults = result?.results || statusRes.data?.results || [];
+
+        if (Array.isArray(liveResults) && liveResults.length > 0) {
+          const liveDocs = liveResults.map((d, index) => {
+            const cleanPath = (d.image_path || d.imagePath || "").replace(/\\/g, "/");
+            const fileNameOnly = cleanPath.split("/").pop();
+
+            return {
+              userId: new mongoose.Types.ObjectId(userId),
+              jobId: job.jobId,
+              pyJobId,
+              batchId,
+              isJob: false,
+              status: "processing",
+              fileName: job.fileName,
+              textNote: job.userPrompt,
+              object: d.object || d.prompt || "unknown",
+              ocrText: d.ocr_text || d.plate || d.ocrText || "",
+              confidence: typeof d.confidence === "number" ? d.confidence : 0.85,
+              trackingId: (d.trackingId || d.tracking_id || `live_${job.jobId}_${index}`).toString(),
+              timestamp: typeof d.timestamp === "number" ? d.timestamp : 0,
+              bbox: Array.isArray(d.bbox) && d.bbox.length === 4 ? d.bbox.map(Number) : [],
+              imagePath: fileNameOnly,
+              screenshotUrl: d.screenshotUrl || (fileNameOnly ? `${BASE_URL}/${fileNameOnly}` : ""),
+              processingTime: "",
+              videoUrl: job.videoUrl,
+              color: d.color || d.vehicle || "",
+            };
+          });
+
+          await Detection.bulkWrite(
+            liveDocs.map((doc) => ({
+              updateOne: {
+                filter: {
+                  userId: doc.userId,
+                  batchId: doc.batchId,
+                  jobId: doc.jobId,
+                  trackingId: doc.trackingId,
+                  isJob: false,
+                },
+                update: { $set: doc },
+                upsert: true,
+              },
+            }))
+          );
+        }
+
+        if (status === "completed") {
+          pythonResult = result;
+          break;
+        }
+
+        if (status === "failed") {
+          throw new Error(`Python job failed: ${error || "unknown"}`);
+        }
+      }
+
+      if (!pythonResult) throw new Error("Python job timed out after 2 hours");
+
+      const processingTimeStr = `${((Date.now() - startTime) / 1000).toFixed(2)}s`;
+
+      const detections = (pythonResult.results || []).map((d, index) => {
+        const cleanPath = (d.image_path || d.imagePath || "").replace(/\\/g, "/");
+        const fileNameOnly = cleanPath.split("/").pop();
+
+        return {
           userId: new mongoose.Types.ObjectId(userId),
-          isJob: { $ne: true },
-        },
-      },
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: {
-            $ifNull: [
-              "$jobId",
-              { $concat: ["file_", { $ifNull: ["$fileName", "unknown"] }] },
-            ],
-          },
-          createdAt: { $max: "$createdAt" },
-          videoUrl: { $first: "$videoUrl" },
-          prompt: { $first: "$textNote" },
-          processingTime: { $first: "$processingTime" },
-          status: { $first: "$status" },
-          detections: {
-            $push: {
-              _id: "$_id",
-              object: "$object",
-              confidence: "$confidence",
-              trackingId: "$trackingId",
-              timestamp: "$timestamp",
-              image: "$screenshotUrl",
-              bbox: "$bbox",
-              color: "$color",
+          jobId: job.jobId,
+          batchId,
+          isJob: false,
+          status: "completed",
+          fileName: job.fileName,
+          textNote: job.userPrompt,
+          object: d.object || d.prompt || "unknown",
+          ocrText: d.ocr_text || d.plate || d.ocrText || "",
+          confidence: typeof d.confidence === "number" ? d.confidence : 0.85,
+          trackingId: (d.trackingId || d.tracking_id || `TRK-${Math.floor(1000 + Math.random() * 9000)}`).toString(),
+          timestamp: typeof d.timestamp === "number" ? d.timestamp : 0,
+          bbox: Array.isArray(d.bbox) && d.bbox.length === 4 ? d.bbox.map(Number) : [],
+          imagePath: fileNameOnly,
+          screenshotUrl: fileNameOnly ? `${BASE_URL}/${fileNameOnly}` : "",
+          processingTime: processingTimeStr,
+          videoUrl: job.videoUrl,
+          color: d.color || d.vehicle || "",
+        };
+      });
+
+      if (detections.length > 0) {
+        await Detection.bulkWrite(
+          detections.map((doc) => ({
+            updateOne: {
+              filter: {
+                userId: doc.userId,
+                batchId: doc.batchId,
+                jobId: doc.jobId,
+                trackingId: doc.trackingId,
+                isJob: false,
+              },
+              update: { $set: doc },
+              upsert: true,
             },
-          },
-        },
-      },
-      { $sort: { createdAt: -1 } },
-    ]);
+          }))
+        );
+      }
 
-    const formatted = history.map((item) => ({
-      _id: String(item._id),
-      videoUrl: item.videoUrl || "",
-      prompt: item.prompt || "",
-      processingTime: item.processingTime || "N/A",
-      status: item.status || "completed",
-      totalDetections: Array.isArray(item.detections) ? item.detections.length : 0,
-      detections: item.detections || [],
-      createdAt: item.createdAt,
-    }));
+      await Detection.deleteMany({
+        batchId,
+        jobId: job.jobId,
+        userId: new mongoose.Types.ObjectId(userId),
+        isJob: false,
+        status: "processing",
+      });
 
-    return res.json({ history: formatted });
-  } catch (err) {
-    console.error("getHistory Error:", err);
-    return res.status(500).json({ error: err.message });
+      await Detection.updateOne(
+        { jobId: job.jobId, isJob: true },
+        { $set: { status: "completed", processingTime: processingTimeStr } }
+      );
+
+    } catch (err) {
+      await Detection.updateOne(
+        { jobId: job.jobId, isJob: true },
+        { $set: { status: "failed", errorMessage: err.message } }
+      );
+    } finally {
+      if (pyJobId) {
+        activePythonJobs.delete(pyJobId);
+        console.log("🧹 Removed multi python job:", pyJobId);
+      }
+    }
   }
+
+  const completedJobs = await Detection.find({
+    batchId,
+    isJob: true,
+    isBatch: { $ne: true },
+    status: "completed",
+  });
+
+  const failedJobs = await Detection.countDocuments({
+    batchId,
+    isJob: true,
+    isBatch: { $ne: true },
+    status: "failed",
+  });
+
+  const totalSeconds = completedJobs.reduce((sum, j) => {
+    return sum + (parseFloat(j.processingTime) || 0);
+  }, 0);
+
+ await Detection.updateOne(
+  { jobId: batchId, isBatch: true },
+  {
+    $set: {
+      status: failedJobs > 0 && completedJobs.length === 0 ? "failed" : "completed",
+      processingTime: `${totalSeconds.toFixed(2)}s`,
+      errorMessage:
+        failedJobs > 0 && completedJobs.length === 0
+          ? "Python server unreachable / network failed"
+          : "",
+    },
+  }
+);
 };
 
-exports.deleteHistoryEntry = async (req, res) => {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+exports.uploadAndProcessMultiple = async (req, res) => {
   try {
     const userId = req.userId;
-    const { entryId } = req.params;
+    const videoFiles = req.files?.files || [];           // "files" field
+    const imageFile = req.files?.image?.[0] || null;    // optional image (same as single)
+    const userPrompt = req.body.text || "person";
 
-    const result = await Detection.deleteMany({
-      userId: new mongoose.Types.ObjectId(userId),
-      isJob: { $ne: true },
-      $or: [{ jobId: entryId }, { _id: entryId }],
-    });
-
-    return res.json({ message: "History entry deleted", deletedCount: result.deletedCount });
-  } catch (err) {
-    console.error("deleteHistoryEntry Error:", err);
-    return res.status(500).json({ error: err.message });
-  }
-};
-
-exports.deleteHistoryBatch = async (req, res) => {
-  try {
-    const userId = req.userId;
-    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
-
-    if (!ids.length) {
-      return res.status(400).json({ message: "ids are required" });
+    if (!videoFiles.length) {
+      return res.status(400).json({ message: "Koi video file nahi mili" });
     }
 
-    const result = await Detection.deleteMany({
+    const BASE_URL = process.env.BASE_URL;
+    const batchId = `batch_${Date.now()}`;
+
+    // Image URL — same as single video logic
+    const imageUrl = imageFile
+      ? `${BASE_URL}/uploads/${imageFile.filename}`
+      : null;
+
+    const jobEntries = [];
+    const jobs = [];
+
+    for (const videoFile of videoFiles) {
+      const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const videoUrl = `${BASE_URL}/uploads/${videoFile.filename}`;
+
+      // Exactly single video jaisa job entry
+      jobEntries.push({
+        userId: new mongoose.Types.ObjectId(userId),
+        jobId,
+        batchId,
+        status: "processing",
+        fileName: videoFile.filename,
+        videoUrl,
+        textNote: userPrompt,
+        isJob: true,
+      });
+
+      jobs.push({ jobId, videoUrl, imageUrl, userPrompt, fileName: videoFile.filename });
+    }
+
+    // Batch tracker
+    jobEntries.push({
       userId: new mongoose.Types.ObjectId(userId),
-      isJob: { $ne: true },
-      $or: [{ jobId: { $in: ids } }, { _id: { $in: ids } }],
+      jobId: batchId,
+      batchId,
+      status: "processing",
+      fileName: `batch_${videoFiles.length}_videos`,
+      textNote: userPrompt,
+      isJob: true,
+      isBatch: true,
+      totalVideos: videoFiles.length,
     });
 
-    return res.json({ message: "History entries deleted", deletedCount: result.deletedCount });
+    await Detection.insertMany(jobEntries, { ordered: false });
+
+    // Background me process karo — exactly single video jaisa
+    processBatchVideos(jobs, batchId, userId, BASE_URL);
+
+    return res.json({
+      message: "Upload successful — processing shuru ho gaya",
+      batchId,
+      totalVideos: videoFiles.length,
+      status: "processing",
+      prompt: userPrompt,
+      hasImage: !!imageFile,
+    });
+
   } catch (err) {
-    console.error("deleteHistoryBatch Error:", err);
+    console.error("Multi-upload Error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
-exports.clearHistory = async (req, res) => {
-  try {
-    const userId = req.userId;
-    const result = await Detection.deleteMany({
-      userId: new mongoose.Types.ObjectId(userId),
-      isJob: { $ne: true },
-    });
+// Internal: har video ko EXACTLY single video jaisa process karo
+// Internal: har video ko EXACTLY single video jaisa process karo
 
-    return res.json({ message: "History cleared", deletedCount: result.deletedCount });
-  } catch (err) {
-    console.error("clearHistory Error:", err);
-    return res.status(500).json({ error: err.message });
-  }
-};
+
+    exports.getHistory = async (req, res) => {
+      try {
+        const userId = req.userId;
+        // ✅ AUTO FIX STUCK PROCESSING JOBS
+        await Detection.updateMany(
+          {
+            userId: new mongoose.Types.ObjectId(userId),
+            isJob: true,
+            status: "processing",
+            createdAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) }, // 5 min old
+          },
+          {
+            $set: {
+              status: "failed",
+              errorMessage: "Processing stopped (network / server issue)",
+            },
+          }
+        );
+
+        const jobs = await Detection.find({
+          userId: new mongoose.Types.ObjectId(userId),
+          isJob: true,
+          isBatch: { $ne: true },
+          status: "completed", // ✅ only completed history show
+        }).sort({ createdAt: -1 });
+
+        const history = await Promise.all(
+          jobs.map(async (job) => {
+            let results = [];
+
+            if (job.status === "completed") {
+              const detections = await Detection.find({
+                jobId: job.jobId,
+                userId: new mongoose.Types.ObjectId(userId),
+                isJob: { $ne: true },
+              }).sort({ createdAt: -1 });
+
+              results = detections.map((d) => ({
+                object: d.object,
+                ocrText: d.ocrText || "",
+                confidence: d.confidence,
+                trackingId: d.trackingId,
+                timestamp: d.timestamp,
+                image_path: d.imagePath,
+                bbox: d.bbox,
+                screenshotUrl: d.screenshotUrl,
+                color: d.color || "",
+              }));
+            }
+
+            const totalUniqueObjects = new Set(results.map((r) => r.trackingId)).size;
+            const counts = job.textNote
+              ? {
+                [`total_${job.textNote.toLowerCase().replace(/\s+/g, "_")}`]:
+                  results.length,
+              }
+              : {};
+
+            return {
+              // ✅ Top-level fields matching processing response
+              message: "Success",
+              processing_time: job.processingTime || null,
+              mode: job.mode || null,
+              total_found: results.length,
+              totalUniqueObjects,
+              counts,
+
+              // ✅ Job meta
+              id: job.jobId,
+              jobId: job.jobId,
+              videoName: job.fileName,
+              prompt: job.textNote,
+              status: job.status,
+              timestamp: job.createdAt,
+              videoUrl: job.videoUrl,
+              total: results.length,
+
+              // ✅ Full results array (same shape as processing response)
+              results,
+            };
+          })
+        );
+
+        return res.json({ history });
+      } catch (err) {
+        console.error("History Error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+    };
+
+    exports.deleteHistoryEntry = async (req, res) => {
+      try {
+        const userId = req.userId;
+        const { entryId } = req.params;
+
+        // ✅ Hamesha jobId se delete karo — simple aur safe
+        const result = await Detection.deleteMany({
+          userId: new mongoose.Types.ObjectId(userId),
+          jobId: entryId,
+        });
+
+        return res.json({ message: "Deleted", deletedCount: result.deletedCount });
+
+      } catch (err) {
+        console.error("deleteHistoryEntry Error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+    };
+
+    // ✅ Multiple jobs delete
+    exports.deleteHistoryBatch = async (req, res) => {
+      try {
+        const userId = req.userId;
+        const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+
+        if (!ids.length) {
+          return res.status(400).json({ message: "ids array is required" });
+        }
+
+        // ids = array of jobIds e.g. ["job_123", "job_456"]
+        const result = await Detection.deleteMany({
+          userId: new mongoose.Types.ObjectId(userId),
+          jobId: { $in: ids },
+        });
+
+        return res.json({
+          message: "History entries deleted",
+          deletedCount: result.deletedCount,
+        });
+      } catch (err) {
+        console.error("deleteHistoryBatch Error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+    };
+
+    // ✅ Clear ALL history (job entries + detections sab)
+    exports.clearHistory = async (req, res) => {
+      try {
+        const userId = req.userId;
+
+        const result = await Detection.deleteMany({
+          userId: new mongoose.Types.ObjectId(userId),
+        });
+
+        return res.json({
+          message: "History cleared",
+          deletedCount: result.deletedCount,
+        });
+      } catch (err) {
+        console.error("clearHistory Error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+    };
+
+
+    exports.downloadDetectionImage = async (req, res) => {
+      try {
+        const { file } = req.query;
+
+        if (!file) {
+          return res.status(400).json({ message: "file is required" });
+        }
+
+        const safeFile = path.basename(file);
+        const filePath = path.join(
+          "/var/www/workingcart__usr/data/www/workingcart.com/Police-Surveillance-AI/backend/ai-python/detected_frames",
+          safeFile
+        );
+
+        return res.download(filePath, safeFile);
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    };
+
+    exports.markJobFailed = async (req, res) => {
+      try {
+        const { jobId } = req.params;
+
+        await Detection.updateOne(
+          { jobId, isJob: true },
+          {
+            $set: {
+              status: "failed",
+              errorMessage: "Status API failed / network error",
+            },
+          }
+        );
+
+        return res.json({ message: "Job marked failed", jobId });
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    };
+
+
+
+
+
+
+exports.getBatchStatus = async (req, res) => {
+      `         `
+      try {
+        const { batchId } = req.params;
+        const userId = req.userId;
+
+        const batch = await Detection.findOne({
+          jobId: batchId,
+          isBatch: true,
+          userId: new mongoose.Types.ObjectId(userId),
+        });
+
+        if (!batch) {
+          return res.json({ batchId, status: "not_found" });
+        }
+
+        const individualJobs = await Detection.find({
+          batchId,
+          isJob: true,
+          isBatch: { $ne: true },
+          userId: new mongoose.Types.ObjectId(userId),
+        });
+
+        const jobSummary = individualJobs.map((j) => ({
+          jobId: j.jobId,
+          fileName: j.fileName,
+          status: j.status,
+          processing_time: j.processingTime || null,
+        }));
+
+        const completed = jobSummary.filter((j) => j.status === "completed").length;
+        const failed = jobSummary.filter((j) => j.status === "failed").length;
+        const total = jobSummary.length;
+
+        let results = [];
+        if (completed > 0 || batch.status === "processing") {
+          const activeJobIds = jobSummary
+            .filter((j) => j.status === "completed" || j.status === "processing")
+            .map((j) => j.jobId);
+
+          const detections = await Detection.find({
+            batchId,
+            isJob: { $ne: true },
+            userId: new mongoose.Types.ObjectId(userId),
+            jobId: { $in: activeJobIds },
+            ...(batch.status === "completed" ? { status: "completed" } : {}),
+          }).sort({ confidence: -1, createdAt: -1 });
+
+          results = detections.map((d) => ({
+            object: d.object,
+            ocrText: d.ocrText,
+            confidence: d.confidence,
+            trackingId: d.trackingId,
+            timestamp: d.timestamp,
+            image_path: d.imagePath,
+            bbox: d.bbox,
+            screenshotUrl: d.screenshotUrl,
+            fileName: d.fileName,
+            jobId: d.jobId,
+            color: d.color || "",
+            processing_time: d.processingTime || null,
+          }));
+        }
+
+        return res.json({
+  message: "Success",
+  jobId: batchId,
+  batchId,
+  processing_time: batch.processingTime || null,
+  status: batch.status,
+  errorMessage:
+    batch.errorMessage ||
+    (failed > 0 ? "Python server unreachable / network failed" : ""),
+  total: results.length,
+  results,
+  totalVideos: total,
+  completed,
+  failed,
+  pending: total - completed - failed,
+  isAllDone: completed + failed === total && total > 0,
+  jobs: jobSummary,
+});
+      } catch (err) {
+        console.error("getBatchStatus Error:", err);
+        return res.status(500).json({ error: err.message });
+      }
+    };

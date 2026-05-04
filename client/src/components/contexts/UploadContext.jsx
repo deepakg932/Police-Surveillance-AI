@@ -10,10 +10,12 @@ export function UploadProvider({ children }) {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [uploadData, setUploadData] = useState({
     video: null,
+    videos: [],
     image: null,
     text: '',
     imagePreviewUrl: null,
-    activeTab: 'video'
+    activeTab: 'video',
+    videoSelectMode: 'single'
   });
 
   const startUpload = useCallback(() => {
@@ -49,20 +51,24 @@ export function UploadProvider({ children }) {
     setUploadedFile(null);
     setUploadData({
       video: null,
+      videos: [],
       image: null,
       text: '',
       imagePreviewUrl: null,
-      activeTab: 'video'
+      activeTab: 'video',
+      videoSelectMode: 'single'
     });
   }, []);
 
   const clearUploadData = useCallback(() => {
     setUploadData({
       video: null,
+      videos: [],
       image: null,
       text: '',
       imagePreviewUrl: null,
-      activeTab: 'video'
+      activeTab: 'video',
+      videoSelectMode: 'single'
     });
   }, []);
 
