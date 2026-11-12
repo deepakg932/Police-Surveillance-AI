@@ -1,7 +1,7 @@
 import React from "react";
 import { useRef, useEffect } from "react";
 import { Loader2, Radio, Search, Download } from "lucide-react";
-
+import {buildFileUrl} from "../../../utils/fileUrl.js"
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 const WorkflowProgress = ({
@@ -32,7 +32,7 @@ const WorkflowProgress = ({
     latestResult?.screenshotUrl?.split("/").pop() ||
     "";
   const matchImageUrl = imageUrl
-    ? `https://workingcart.com/files/${imageUrl}`
+    ? buildFileUrl(imageUrl)
     : "";
   const confidence = Math.round((latestResult?.confidence || 0) * 100);
 
@@ -205,7 +205,7 @@ const WorkflowProgress = ({
         <div className="h-48 bg-black relative flex items-center justify-center">
           {imageUrl ? (
             <img
-              src={`https://workingcart.com/files/${imageUrl}`}
+              src={buildFileUrl(imageUrl)}
               alt="Live Match"
               className="max-h-full max-w-full object-contain border border-green-500"
             />

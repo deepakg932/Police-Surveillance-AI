@@ -1,5 +1,6 @@
 // components/Detection/PreviousResultsTable.jsx
 import React, { useState, useEffect } from "react";
+import { buildFileUrl } from "../../../utils/fileUrl.js";
 import { toast } from "react-hot-toast";
 import {
   Clock,
@@ -68,20 +69,13 @@ const PreviousResultsTable = ({ onViewResult }) => {
     return `${baseUrl}/${rawUrl.replace(/^\/+/, "")}`;
   };
 
-  const resolveDetectionPreviewImage = (result) => {
-    const direct =
-      result?.imagepath_full || result?.image_path || result?.imagePath || "";
-    if (typeof direct === "string" && /^https?:\/\//i.test(direct)) {
-      return direct;
-    }
+    const resolveDetectionPreviewImage = (result) =>
+    buildFileUrl(
+      result?.imagepath_full || result?.image_path || result?.imagePath || "",
+    );
 
-    const path =
-      result?.imagepath_full || result?.image_path || result?.imagePath || "";
-    if (!path || typeof path !== "string") return "";
-    if (/^https?:\/\//i.test(path)) return path;
 
-    return `https://workingcart.com/files/${path.replace(/^\/+/, "")}`;
-  };
+
 
   const openConfirm = (key, message, onConfirm) => {
     setConfirmState({ key, message, onConfirm });

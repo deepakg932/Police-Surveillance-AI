@@ -1,17 +1,51 @@
+import sys
+import os
+
+# Fix Windows DLL loading for PyTorch (c10.dll)
+if sys.platform == "win32":
+    for p in sys.path:
+        t_lib = os.path.join(p, "torch", "lib")
+        if os.path.isdir(t_lib):
+            os.environ["PATH"] = t_lib + os.pathsep + os.environ.get("PATH", "")
+            if hasattr(os, "add_dll_directory"):
+                try:
+                    os.add_dll_directory(t_lib)
+                except Exception:
+                    pass
+            break
+
+import torch
 from fastapi import FastAPI, Request
 from ultralytics import YOLO, YOLOWorld
 import cv2
-import os
-import torch
 import numpy as np
 import requests
-import easyocr
 import re
 from difflib import SequenceMatcher
 from torchvision import models, transforms
 from PIL import Image
-from deepface import DeepFace
 from fastapi.staticfiles import StaticFiles
+
+# Safe EasyOCR loader
+try:
+    import easyocr
+except Exception as _ocr_err:
+    print(f"ℹ️ easyocr not installed ({_ocr_err}). OCR fallback dummy will be used.")
+    easyocr = None
+
+# Safe DeepFace loader
+try:
+    from deepface import DeepFace
+except Exception as _df_err:
+    print(f"ℹ️ deepface not installed ({_df_err}). Gender/face analysis fallback dummy will be used.")
+    class DummyDeepFace:
+        @staticmethod
+        def extract_faces(*args, **kwargs):
+            return []
+        @staticmethod
+        def analyze(*args, **kwargs):
+            return [{"dominant_gender": "unknown", "gender": {}}]
+    DeepFace = DummyDeepFace
 import re
 import threading
 import time
@@ -105,9 +139,67 @@ COLOR_CALIBRATION_PROFILE = {
 
 
 car_model   = YOLO("yolov8n.pt").to(device)
-plate_model = YOLO("license_plate_detector.pt").to(device)
 world_model = YOLOWorld("yolov8s-worldv2.pt").to(device)
-reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+
+class FallbackPlateModel:
+    """Fallback plate detector using YOLOWorld when license_plate_detector.pt is not available."""
+    def __init__(self, fallback_world_model):
+        self.world_model = fallback_world_model
+
+    def __call__(self, img, conf=0.15, imgsz=640, **kwargs):
+        try:
+            self.world_model.set_classes(["license plate", "number plate"])
+            return self.world_model(img, conf=conf, imgsz=imgsz, **kwargs)
+        except Exception as e:
+            print(f"⚠️ FallbackPlateModel error: {e}")
+            return self.world_model(img, conf=0.99)
+
+plate_model = None
+plate_weights = os.path.join(os.path.dirname(__file__), "license_plate_detector.pt") if "__file__" in locals() else "license_plate_detector.pt"
+
+# 1. Try local weights file
+if os.path.exists(plate_weights) or os.path.exists("license_plate_detector.pt"):
+    try:
+        actual_path = plate_weights if os.path.exists(plate_weights) else "license_plate_detector.pt"
+        plate_model = YOLO(actual_path).to(device)
+        print(f"✅ Loaded custom license plate detector from: {actual_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to load local license_plate_detector.pt: {e}")
+
+# 2. If not found locally, try auto-downloading from GitHub
+if plate_model is None:
+    print("ℹ️ 'license_plate_detector.pt' not found locally. Attempting auto-download from GitHub...")
+    try:
+        import urllib.request
+        download_url = "https://github.com/Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8/raw/main/license_plate_detector.pt"
+        target_path = plate_weights if "__file__" in locals() else "license_plate_detector.pt"
+        urllib.request.urlretrieve(download_url, target_path)
+        if os.path.exists(target_path):
+            plate_model = YOLO(target_path).to(device)
+            print("✅ Auto-downloaded and loaded 'license_plate_detector.pt' successfully!")
+    except Exception as dl_err:
+        print(f"⚠️ Could not auto-download license_plate_detector.pt: {dl_err}")
+
+# 3. Fallback to YOLO-World if still not loaded (Never crash startup!)
+if plate_model is None:
+    print("⚠️ Using YOLO-World as zero-shot fallback for license plate detection (Server will start smoothly).")
+    plate_model = FallbackPlateModel(world_model)
+
+if easyocr is not None:
+    try:
+        reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+        print("✅ EasyOCR loaded successfully.")
+    except Exception as _r_err:
+        print(f"⚠️ EasyOCR init warning: {_r_err}")
+        reader = None
+else:
+    reader = None
+
+if reader is None:
+    class DummyReader:
+        def readtext(self, *args, **kwargs):
+            return []
+    reader = DummyReader()
 
 # --------------------------------
 # FEATURE EXTRACTOR

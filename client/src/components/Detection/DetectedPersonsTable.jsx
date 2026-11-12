@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { buildFileUrl } from "../../../utils/fileUrl.js";
 import {
   Play,
   Download,
@@ -106,7 +107,8 @@ const DetectedPersonsTable = ({
   };
 
   const resolveDetectionImageUrl = (person) => {
-    const rawPath = person?.imagepath_full ||person?.image_path || "";
+    const rawPath = person?.imagepath_full ||person?.image_path || ""
+    return buildFileUrl(rawPath)
 console.log(person)
 
     if (!rawPath || typeof rawPath !== "string") {
